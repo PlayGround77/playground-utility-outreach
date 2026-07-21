@@ -352,6 +352,38 @@ function TEST_APPSTORESPY_AUTH() {
   log_('Done. The variant marked ✅ (HTTP 200) is the correct auth method.');
 }
 
+/**
+ * Fetch the AppStoreSpy OpenAPI spec and print the authentication scheme +
+ * the apps-query endpoint shape. This is authoritative — the server tells us
+ * exactly how to pass the key and what fields it returns.
+ */
+function TEST_APPSTORESPY_SPEC() {
+  const url = CONFIG.appStoreSpy.apiUrl + '/openapi.json';
+  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  log_('GET ' + url + '  ->  HTTP ' + res.getResponseCode());
+
+  let spec;
+  try { spec = JSON.parse(res.getContentText()); }
+  catch (e) {
+    log_('Response is not JSON. First 800 chars:');
+    log_(String(res.getContentText()).substring(0, 800));
+    return;
+  }
+
+  log_('AUTH securitySchemes: ' + JSON.stringify(spec.components && spec.components.securitySchemes));
+  log_('AUTH global security: ' + JSON.stringify(spec.security));
+
+  const paths = Object.keys(spec.paths || {});
+  log_('PATHS (' + paths.length + '): ' + paths.join(', ').substring(0, 1800));
+
+  paths.forEach(function (p) {
+    if (p.indexOf('query') !== -1 || p.indexOf('apps') !== -1 || p.indexOf('developer') !== -1) {
+      log_('--- ' + p + ' ---');
+      log_(JSON.stringify(spec.paths[p]).substring(0, 1800));
+    }
+  });
+}
+
 /* ---------------------------------------------------------------------------
  * Daily API call cap.
  * ------------------------------------------------------------------------- */
