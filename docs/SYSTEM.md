@@ -14,15 +14,15 @@ Fully automated cold-outreach pipeline for recruiting mobile **utility-app**
 studios into PlayGround's publishing program:
 
 ```
-AppStoreSpy (sourcing) → Monday.com board (queue + CRM) → Gmail (sending)
-     ↑                                                          ↓
-     └────────── auto-refill when queue < 150 ────── reply detection loop
+AppStoreSpy (sourcing) → Google Sheet (queue + CRM) → Gmail (sending)
+     ↑                                                     ↓
+     └───────── auto-refill when queue < 150 ──── reply detection loop
 ```
 
 - Finds utility-app studios via AppStoreSpy against defined criteria
 - Screens them through a layered rejection firewall
 - Emails a personalized 3-touch sequence (initial → FU1 → FU2 → close), all in one Gmail thread
-- Detects replies/bounces automatically, updates the board, stops sequences
+- Detects replies/bounces automatically, updates the sheet, stops sequences
 - Refills its own queue when it runs low
 - Reports daily by email
 - Human's only jobs: answer replies, approve lists, watch daily summaries
@@ -30,14 +30,16 @@ AppStoreSpy (sourcing) → Monday.com board (queue + CRM) → Gmail (sending)
 ## 2. ARCHITECTURE
 
 - **Runtime:** Google Apps Script (cloud). Files: `Config.gs`, `Guards.gs`,
-  `Code.gs` (engine), `PoolRefill.gs` (sourcing). Deployed via clasp.
+  `Sheet.gs` (data layer), `Code.gs` (engine), `PoolRefill.gs` (sourcing).
+- **Data store:** a **Google Sheet** — native to Apps Script, no token needed.
+  One tab (`Leads`), one row per studio, accessed via `Sheet.gs`.
 - **Gmail:** Advanced Service (Gmail API v1) for raw-MIME sends — required for
   proper threading (In-Reply-To / References headers + threadId).
-- **Monday:** GraphQL API v2, token in Script Property `MONDAY_TOKEN`.
 - **AppStoreSpy:** REST API, key in Script Property `APPSTORESPY_KEY`, endpoint
-  `/play/apps/query`.
-- **Secrets policy:** tokens ONLY in Script Properties. Never in code, chat, or files.
-- **State:** the Monday board is the single source of truth. Daily counters
+  `/play/apps/query`. This is the ONLY external token.
+- **Secrets policy:** the AppStoreSpy key lives ONLY in Script Properties. Never
+  in code, chat, or files.
+- **State:** the Google Sheet is the single source of truth. Daily counters
   (`sentToday`, `bouncedToday`) and the refill added-index live in Script
   Properties.
 
@@ -55,39 +57,46 @@ Plus transient one-off `runPoolRefillResume` triggers during a refill chain
 ⚠️ **FOOTGUN:** `SETUP()` deletes ALL triggers and recreates only the engine's
 three. If you ever re-run `SETUP()`, run `SETUP_POOL_REFILL()` right after.
 
-## 3. MONDAY BOARD
+## 3. GOOGLE SHEET
 
-Configure the board ID and column/group IDs in `CONFIG.monday`. Run
-`listBoardColumns()` / `listBoardGroups()` from the editor to print real IDs.
+One tab (`CONFIG.sheet.tabName`, default `Leads`), one row per studio, header
+row in row 1. Run `SETUP_SHEET()` once to create the tab + headers. Columns are
+addressed by header NAME (configurable in `CONFIG.sheet.headers`), so there are
+no fragile IDs to copy.
 
-### Columns (semantics)
-| Column | Config key | Notes |
+### Columns
+| Header | Config key | Notes |
 |---|---|---|
-| Name (item) | — | studio name |
-| Contact Email | `columns.email` | recipient |
-| Outreach Status | `columns.outreachStatus` | `Email Sent`, `Follow-up 1 Sent`, `Follow-up 2 Sent`, `Sequence Closed` |
-| Response Status | `columns.responseStatus` | `Respond`, `Booked a call`, `Not Relevant`, `No Response` |
-| Initial Email Date | `columns.initialDate` | day 0 |
-| Follow-up 1 Date | `columns.fu1Date` | |
-| Follow-up 2 Date | `columns.fu2Date` | |
-| Priority Score | `columns.priority` | = daily installs (ipd) × total apps count |
-| Notes | `columns.notes` | stores Gmail threadId as `[thread:XXXX]` + annotations |
-| Store Link | `columns.storeLink` | |
-| Top App | `columns.topApp` | most-installed app, feeds personalization |
+| Studio Name | `headers.name` | studio name |
+| Email | `headers.email` | recipient |
+| Outreach Status | `headers.outreach` | `Email Sent`, `Follow-up 1 Sent`, `Follow-up 2 Sent`, `Sequence Closed` |
+| Response Status | `headers.response` | `Respond`, `Booked a call`, `Not Relevant`, `No Response` |
+| Initial Date | `headers.initialDate` | day 0 |
+| FU1 Date | `headers.fu1Date` | |
+| FU2 Date | `headers.fu2Date` | |
+| Priority | `headers.priority` | = daily installs (ipd) × total apps count |
+| Notes | `headers.notes` | stores Gmail threadId as `[thread:XXXX]` + annotations |
+| Store Link | `headers.storeLink` | |
+| Top App | `headers.topApp` | most-installed app, feeds personalization |
+| Group | `headers.group` | date group / Block List / Replied / Pool DD.MM |
 
-### Groups & workflow
-- **Daily date groups:** every sending day the engine creates (once) a group
-  named `DD.MM` at the top; every studio that receives its INITIAL email that
-  day is MOVED into that day's group.
+"Groups" are simply values in the **Group** column — there are no Monday-style
+group objects. "Moving" an item to a group means setting that cell.
+
+### Workflow
+- **Daily date groups:** every studio that receives its INITIAL email that day
+  gets its Group cell set to `DD.MM`. (Filter/sort the sheet by Group to mirror
+  the manual date-group view.)
 - **Replies mark status in place:** reply detected → Response Status = `Respond`,
-  item STAYS in its date group. `Booked a call` / `Not Relevant` are set
-  MANUALLY by the owner after reading replies — the watcher must never overwrite
-  an already-set Response Status.
-- **Block List** (`groups.blockList`): never contacted, never refill-added. Also
-  used to kill follow-ups for already-emailed junk ("FU-kill" — move the item
-  here and the guard blocks its follow-ups because it is a blocked group).
-- **Replied** (`groups.replied`): legacy/manual group, excluded from all sending.
-- **Pool DD.MM** groups are created by the refill module.
+  the row's Group is unchanged. `Booked a call` / `Not Relevant` are set
+  MANUALLY by the owner after reading replies — the watcher never overwrites an
+  already-set Response Status.
+- **Block List** (`groups.blockList`, the literal value `Block List`): never
+  contacted, never refill-added. Also used to kill follow-ups for already-emailed
+  junk ("FU-kill" — set the Group cell to `Block List` and the guard blocks its
+  follow-ups).
+- **Replied** (`groups.replied`): legacy/manual value, excluded from all sending.
+- **Pool DD.MM** groups are written by the refill module.
 
 ## 4. SENDING ENGINE (`runSender`)
 
@@ -101,16 +110,16 @@ Configure the board ID and column/group IDs in `CONFIG.monday`. Run
   by Priority Score desc; over-fetch `fetchMultiplier=6×` to survive guard-skips).
 - **New-send pipeline per candidate:** email valid → guard firewall → duplicate
   check (`label:outreach-sent to:<email>` + in-run seen-set) → send → apply label
-  → Monday update (status = Email Sent, date = today, append `[thread:ID]` to
-  Notes, MOVE to today's date group).
+  → sheet update (Outreach Status = Email Sent, Initial Date = today, append
+  `[thread:ID]` to Notes, set Group to today's `DD.MM`).
 - **Threading:** initial = new MIME message; FUs = raw MIME with `In-Reply-To` +
   `References` of the thread's root Message-ID, sent with the same threadId → the
   recipient sees one conversation.
 - **Cadence:** FU1 ≥ 3 days after initial; FU2 ≥ 4 days after FU1; Sequence Closed
   (+ Response = No Response) ≥ 7 days after FU2. Any detected reply stops the
   sequence immediately (a non-empty Response Status short-circuits the due queries).
-- **DRY_RUN flag:** `true` → logs `[DRY] NEW → …` / `[DRY] FU → …` / `[DRY] Monday
-  set/move …` and writes NOTHING.
+- **DRY_RUN flag:** `true` → logs `[DRY] NEW → …` / `[DRY] FU → …` / `[DRY] Sheet
+  set …` and writes NOTHING.
 
 ## 5. TEMPLATES (personalized)
 
@@ -140,7 +149,7 @@ Relevant` + Outreach = `Sequence Closed` + bounce counter.
 
 `screenReason_(cand)` runs on EVERY initial send AND every follow-up
 (`[SKIP-FU]` logging), and the SAME rule-set runs in pool screening so junk
-never enters the board. Order:
+never enters the sheet. Order:
 
 1. **China policy (explicit business decision — exclude Chinese studios):** email
    domains qq.com/163.com/126.com/foxmail.com; any .cn/.com.cn domain; CJK
@@ -165,7 +174,7 @@ never enters the board. Order:
    win-cash/trailing-"cash". These are never PlayGround utility targets.
 7. **Shared-email farm:** one email serving 2+ developer names = farm. The refill
    dedup index carries a soft `email:` key so a second dev on the same mailbox is
-   caught; extend `isSharedEmailFarm_` if you want a hard board-wide sweep.
+   caught; extend `isSharedEmailFarm_` if you want a hard sheet-wide sweep.
 
 Publishers are rejected at sourcing (`\bpublish(er|ing)?\b` in the dev name) —
 they are competitors, not leads.
@@ -189,7 +198,7 @@ they are competitors, not leads.
   an empty pool).
 - **Quota protection:** daily hard cap on AppStoreSpy calls
   (`dailyCallCap`, default 3000) + exponential backoff (`fetchWithBackoff_`).
-- `CONFIG.DRY_RUN` also governs refill (log-only, no board writes).
+- `CONFIG.DRY_RUN` also governs refill (log-only, no sheet writes).
 
 ### AppStoreSpy field mapping
 The response shape is account/plan-specific. `mapAppStoreSpyRow_()` and
@@ -220,7 +229,7 @@ counts beside each label are live numbers. Created by `SETUP` (`ensureLabels_`).
 - **Morning:** read the 08:00 summary email (sent/bounces/replies/queue) + refill
   summary if one ran — eyeball the added list.
 - **During the day:** work the `Outreach/Replied` label — answer, set `Booked a
-  call` / `Not Relevant` on the board manually.
+  call` / `Not Relevant` in the sheet manually.
 - **Evening (habit):** a per-day quality review of the date group; any leak found
   becomes a new rule (a keyword in `Guards.gs`, a name on the China block list).
 
@@ -231,9 +240,9 @@ These are encoded so they cannot regress:
 1. **Approval discipline** — a prepared "approved, go live" draft must never be
    executed as a real approval. Live runs require a fresh explicit sign-off in
    the same thread. (Enforced by the DRY_RUN default + placeholder guard + human rule.)
-2. **Dedup must index the ENTIRE board** — including Block List and Replied —
+2. **Dedup must index the ENTIRE sheet** — including Block List and Replied —
    via a separate fetch, or blocked/emailed studios get re-added as fresh items
-   and double-emailed. `buildDedupIndex_` uses the full board; a pre-refill unit
+   and double-emailed. `buildDedupIndex_` uses the full sheet; a pre-refill unit
    test (`preRefillDedupTest_`) asserts a known-blocked and a known-sent item are
    rejected, else the refill ABORTS.
 3. **Persistent added-index** prevents duplicates within a single refill chain
@@ -255,5 +264,5 @@ games-focused outreach system:
   TARGETS here, not junk. China policy, shared-email farms, brand impersonation,
   and casino/money/vape top-app sanity all remain.
 - **New dedicated mailbox** → full `30/50/75/100` warm-up ramp (zero reputation).
-- **Clean label namespace** (`Outreach/*`) and its own Monday board + Apps Script
+- **Clean label namespace** (`Outreach/*`) and its own Google Sheet + Apps Script
   project. No references to any other publisher or program anywhere in the copy.

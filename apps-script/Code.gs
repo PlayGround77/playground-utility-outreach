@@ -1,7 +1,7 @@
 /**
  * Code.gs — PlayGround Utility Outreach Engine.
  *
- * Runtime: Google Apps Script.
+ * Runtime: Google Apps Script. Data store: Google Sheets (see Sheet.gs).
  * Requires the Gmail Advanced Service (Gmail API v1) to be enabled
  * (Services > + > Gmail API) for raw-MIME sends + reliable threading.
  *
@@ -26,13 +26,8 @@ function secret_(key) {
 }
 function props_() { return PropertiesService.getScriptProperties(); }
 
-function nowTz_() {
-  // A Date is absolute; we format with the configured tz where it matters.
-  return new Date();
-}
-function fmt_(date, pattern) {
-  return Utilities.formatDate(date, CONFIG.sender.timezone, pattern);
-}
+function nowTz_() { return new Date(); }
+function fmt_(date, pattern) { return Utilities.formatDate(date, CONFIG.sender.timezone, pattern); }
 function todayStamp_() { return fmt_(nowTz_(), 'yyyy-MM-dd'); }
 function dayMonthLabel_() { return fmt_(nowTz_(), 'dd.MM'); }
 
@@ -52,137 +47,6 @@ function validateForLive_() {
     throw new Error('Refusing live run — unfilled config placeholders: ' +
       Array.from(new Set(holes)).join(', '));
   }
-}
-
-/* =========================================================================
- * MONDAY.COM API
- * ========================================================================= */
-
-function mondayQuery_(query, variables) {
-  const res = UrlFetchApp.fetch(CONFIG.monday.apiUrl, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: {
-      Authorization: secret_(CONFIG.secretKeys.monday),
-      'API-Version': CONFIG.monday.apiVersion
-    },
-    payload: JSON.stringify({ query: query, variables: variables || {} }),
-    muteHttpExceptions: true
-  });
-  const text = res.getContentText();
-  const body = JSON.parse(text);
-  if (res.getResponseCode() >= 300 || body.errors) {
-    throw new Error('Monday API error: ' + text);
-  }
-  return body.data;
-}
-
-function colIds_() {
-  const c = CONFIG.monday.columns;
-  return Object.keys(c).map(function (k) { return c[k]; });
-}
-
-function itemColumnFragment_() {
-  const ids = colIds_().map(function (id) { return '"' + id + '"'; }).join(', ');
-  return 'id name group { id title } column_values(ids: [' + ids + ']) { id text value }';
-}
-
-/** Parse a raw Monday item into a normalized object. */
-function parseItem_(raw) {
-  const col = CONFIG.monday.columns;
-  const byId = {};
-  (raw.column_values || []).forEach(function (cv) { byId[cv.id] = cv; });
-  function text(id) { return byId[id] ? (byId[id].text || '') : ''; }
-
-  const notes = text(col.notes);
-  const threadMatch = notes.match(/\[thread:([^\]]+)\]/);
-
-  return {
-    id: raw.id,
-    name: raw.name || '',
-    groupId: raw.group ? raw.group.id : '',
-    groupTitle: raw.group ? raw.group.title : '',
-    email: text(col.email),
-    outreach: text(col.outreachStatus),
-    response: text(col.responseStatus),
-    initialDate: text(col.initialDate),
-    fu1Date: text(col.fu1Date),
-    fu2Date: text(col.fu2Date),
-    priority: parseFloat(text(col.priority)) || 0,
-    notes: notes,
-    topApp: text(col.topApp),
-    threadId: threadMatch ? threadMatch[1] : ''
-  };
-}
-
-/** Fetch every item on the board (paginated), normalized. */
-function fetchAllItems_() {
-  const items = [];
-  const first = mondayQuery_(
-    'query($board:[ID!], $limit:Int){ boards(ids:$board){ items_page(limit:$limit){ cursor items { ' +
-    itemColumnFragment_() + ' } } } }',
-    { board: [CONFIG.monday.boardId], limit: 200 }
-  );
-  const page = first.boards[0].items_page;
-  page.items.forEach(function (r) { items.push(parseItem_(r)); });
-  let cursor = page.cursor;
-
-  while (cursor) {
-    const next = mondayQuery_(
-      'query($cursor:String, $limit:Int){ next_items_page(limit:$limit, cursor:$cursor){ cursor items { ' +
-      itemColumnFragment_() + ' } } }',
-      { cursor: cursor, limit: 200 }
-    );
-    const np = next.next_items_page;
-    np.items.forEach(function (r) { items.push(parseItem_(r)); });
-    cursor = np.cursor;
-  }
-  return items;
-}
-
-function jsonString_(obj) {
-  // Monday column values are passed as a JSON string inside GraphQL vars.
-  return JSON.stringify(obj);
-}
-
-function setColumnValues_(itemId, valuesObj) {
-  if (dry_()) { log_('[DRY] Monday set ' + itemId + ' -> ' + JSON.stringify(valuesObj)); return; }
-  mondayQuery_(
-    'mutation($board:ID!, $item:ID!, $vals:JSON!){ change_multiple_column_values(board_id:$board, item_id:$item, column_values:$vals){ id } }',
-    { board: CONFIG.monday.boardId, item: itemId, vals: jsonString_(valuesObj) }
-  );
-}
-
-function moveItemToGroup_(itemId, groupId) {
-  if (dry_()) { log_('[DRY] Monday move ' + itemId + ' -> group ' + groupId); return; }
-  mondayQuery_(
-    'mutation($item:ID!, $group:String!){ move_item_to_group(item_id:$item, group_id:$group){ id } }',
-    { item: itemId, group: groupId }
-  );
-}
-
-/** Ensure a top-of-board date group (DD.MM) exists; return its id. */
-function ensureDateGroup_(label) {
-  const cacheKey = 'group_' + label;
-  const cached = props_().getProperty(cacheKey);
-  if (cached) return cached;
-
-  const data = mondayQuery_(
-    'query($board:[ID!]){ boards(ids:$board){ groups { id title } } }',
-    { board: [CONFIG.monday.boardId] }
-  );
-  const existing = (data.boards[0].groups || []).filter(function (g) { return g.title === label; })[0];
-  if (existing) { props_().setProperty(cacheKey, existing.id); return existing.id; }
-
-  if (dry_()) { log_('[DRY] Monday create group ' + label); return 'DRY_GROUP'; }
-
-  const created = mondayQuery_(
-    'mutation($board:ID!, $title:String!){ create_group(board_id:$board, group_name:$title, position:"before"){ id } }',
-    { board: CONFIG.monday.boardId, title: label }
-  );
-  const gid = created.create_group.id;
-  props_().setProperty(cacheKey, gid);
-  return gid;
 }
 
 /* =========================================================================
@@ -343,9 +207,8 @@ function dailyQuota_() {
 }
 
 function withinWindow_() {
-  const dow = parseInt(fmt_(nowTz_(), 'u'), 10) % 7; // Utilities 'u': 1=Mon..7=Sun
-  const jsDow = (dow === 7) ? 0 : dow; // map to JS getDay (0=Sun)
-  if (CONFIG.sender.skipWeekdays.indexOf(jsDow) !== -1) return false;
+  const dow = parseInt(fmt_(nowTz_(), 'u'), 10) % 7; // 'u': 1=Mon..7=Sun -> 0=Sun..6=Sat
+  if (CONFIG.sender.skipWeekdays.indexOf(dow) !== -1) return false;
   const hour = parseInt(fmt_(nowTz_(), 'H'), 10);
   return hour >= CONFIG.sender.windowStartHour && hour < CONFIG.sender.windowEndHour;
 }
@@ -360,7 +223,6 @@ function remainingRunsToday_() {
 function jitterSleep_() {
   if (dry_()) return;
   const lo = CONFIG.sender.jitterMinSec, hi = CONFIG.sender.jitterMaxSec;
-  // Apps Script forbids random-free determinism only in Workflows; here it's fine.
   const secs = lo + Math.floor(Math.random() * (hi - lo + 1));
   Utilities.sleep(secs * 1000);
 }
@@ -377,7 +239,7 @@ function runSender() {
   const quota = dailyQuota_();
   const sentToday = getCounter_('sentToday');
   const bouncedToday = getCounter_('bouncedToday');
-  let remaining = quota - sentToday;
+  const remaining = quota - sentToday;
 
   // Bounce brake.
   if (sentToday >= CONFIG.safety.minSendsForBrake &&
@@ -403,14 +265,11 @@ function runSender() {
 
 /** Close sequences whose FU2 aged past the close window (no email sent). */
 function runCloseSweep_(all) {
-  const L = CONFIG.monday.outreachLabels, R = CONFIG.monday.responseLabels;
+  const L = CONFIG.sheet.outreachLabels, R = CONFIG.sheet.responseLabels;
   all.forEach(function (it) {
     if (it.outreach === L.fu2Sent && !it.response &&
         daysBetween_(it.fu2Date, todayStamp_()) >= CONFIG.sender.closeAfterDays) {
-      const vals = {};
-      vals[CONFIG.monday.columns.outreachStatus] = { label: L.sequenceClosed };
-      vals[CONFIG.monday.columns.responseStatus] = { label: R.noResponse };
-      setColumnValues_(it.id, vals);
+      setItemFields_(it, { outreach: L.sequenceClosed, response: R.noResponse });
       if (it.threadId) applyLabel_(it.threadId, CONFIG.labels.closed);
       log_('CLOSE ' + it.name);
     }
@@ -420,7 +279,7 @@ function runCloseSweep_(all) {
 /** Returns count actually sent. type = 'fu1' | 'fu2'. */
 function processFollowups_(all, type, budget, seen) {
   if (budget <= 0) return 0;
-  const L = CONFIG.monday.outreachLabels;
+  const L = CONFIG.sheet.outreachLabels;
   const isFU2 = type === 'fu2';
 
   const due = all.filter(function (it) {
@@ -438,14 +297,14 @@ function processFollowups_(all, type, budget, seen) {
   let sent = 0;
   for (let i = 0; i < due.length && sent < budget; i++) {
     const it = due[i];
-    if (seen[it.email]) continue;
+    if (seen[it.email.toLowerCase()]) continue;
 
     // Guards run on EVERY follow-up too.
     const reason = screenReason_({ name: it.name, email: it.email, notes: it.notes, topApp: it.topApp });
     if (reason) { log_('[SKIP-FU] ' + it.name + ' :: ' + reason); continue; }
 
     const tmpl = isFU2 ? tmplFU2_(it) : tmplFU1_(it);
-    seen[it.email] = true;
+    seen[it.email.toLowerCase()] = true;
 
     if (dry_()) {
       log_('[DRY] FU (' + type + ') -> ' + it.email + ' (' + it.name + ')');
@@ -456,16 +315,8 @@ function processFollowups_(all, type, budget, seen) {
       sendRaw_(buildMime_(it.email, subject, tmpl.html, extra), it.threadId);
     }
 
-    // Board + labels.
-    const vals = {};
-    if (isFU2) {
-      vals[CONFIG.monday.columns.outreachStatus] = { label: L.fu2Sent };
-      vals[CONFIG.monday.columns.fu2Date] = { date: todayStamp_() };
-    } else {
-      vals[CONFIG.monday.columns.outreachStatus] = { label: L.fu1Sent };
-      vals[CONFIG.monday.columns.fu1Date] = { date: todayStamp_() };
-    }
-    setColumnValues_(it.id, vals);
+    if (isFU2) setItemFields_(it, { outreach: L.fu2Sent, fu2Date: todayStamp_() });
+    else       setItemFields_(it, { outreach: L.fu1Sent, fu1Date: todayStamp_() });
     applyLabel_(it.threadId, isFU2 ? CONFIG.labels.fu2 : CONFIG.labels.fu1);
 
     bumpCounter_('sentToday', 1);
@@ -478,16 +329,13 @@ function processFollowups_(all, type, budget, seen) {
 
 function processNew_(all, budget, seen) {
   if (budget <= 0) return 0;
-  const L = CONFIG.monday.outreachLabels;
+  const L = CONFIG.sheet.outreachLabels;
 
   const candidates = all
-    .filter(function (it) {
-      return !it.outreach && it.email && !inBlockedGroup_(it);
-    })
+    .filter(function (it) { return !it.outreach && it.email && !inBlockedGroup_(it); })
     .sort(function (a, b) { return b.priority - a.priority; });
 
   const dateLabel = dayMonthLabel_();
-  let groupId = null; // lazily created only if we actually send
   let sent = 0;
 
   const limit = Math.min(candidates.length, budget * CONFIG.sender.fetchMultiplier);
@@ -517,15 +365,13 @@ function processNew_(all, budget, seen) {
       threadId = res.threadId;
     }
 
-    if (!groupId) groupId = ensureDateGroup_(dateLabel);
-
-    const vals = {};
-    vals[CONFIG.monday.columns.outreachStatus] = { label: L.emailSent };
-    vals[CONFIG.monday.columns.initialDate] = { date: todayStamp_() };
     const newNotes = (it.notes ? it.notes + ' ' : '') + '[thread:' + (threadId || 'DRY') + ']';
-    vals[CONFIG.monday.columns.notes] = newNotes;
-    setColumnValues_(it.id, vals);
-    moveItemToGroup_(it.id, groupId);
+    setItemFields_(it, {
+      outreach: L.emailSent,
+      initialDate: todayStamp_(),
+      notes: newNotes,
+      group: dateLabel   // "move" to today's date group
+    });
     if (threadId) applyLabel_(threadId, CONFIG.labels.sent);
 
     bumpCounter_('sentToday', 1);
@@ -536,18 +382,13 @@ function processNew_(all, budget, seen) {
   return sent;
 }
 
-function inBlockedGroup_(it) {
-  return it.groupId === CONFIG.monday.groups.blockList ||
-         it.groupId === CONFIG.monday.groups.replied;
-}
-
 /* =========================================================================
  * REPLY / BOUNCE WATCHER
  * ========================================================================= */
 
 function runReplyWatcher() {
   validateForLive_();
-  const L = CONFIG.monday.outreachLabels, R = CONFIG.monday.responseLabels;
+  const L = CONFIG.sheet.outreachLabels, R = CONFIG.sheet.responseLabels;
   const me = CONFIG.brand.ownerEmail.toLowerCase();
 
   const active = fetchAllItems_().filter(function (it) {
@@ -560,35 +401,22 @@ function runReplyWatcher() {
     try { thread = GmailApp.getThreadById(it.threadId); } catch (e) { return; }
     if (!thread) return;
 
-    const msgs = thread.getMessages();
     let isReply = false, isBounce = false;
-
-    msgs.forEach(function (m) {
+    thread.getMessages().forEach(function (m) {
       const from = m.getFrom().toLowerCase();
       if (from.indexOf(me) !== -1) return; // our own messages
-      if (from.indexOf('mailer-daemon') !== -1 || from.indexOf('postmaster') !== -1) {
-        isBounce = true;
-      } else {
-        isReply = true;
-      }
+      if (from.indexOf('mailer-daemon') !== -1 || from.indexOf('postmaster') !== -1) isBounce = true;
+      else isReply = true;
     });
 
     if (isBounce) {
-      const vals = {};
-      vals[CONFIG.monday.columns.responseStatus] = { label: R.notRelevant };
-      vals[CONFIG.monday.columns.outreachStatus] = { label: L.sequenceClosed };
-      setColumnValues_(it.id, vals);
+      setItemFields_(it, { response: R.notRelevant, outreach: L.sequenceClosed });
       applyLabel_(it.threadId, CONFIG.labels.bounced);
       bumpCounter_('bouncedToday', 1);
       log_('BOUNCE ' + it.name);
     } else if (isReply) {
       applyLabel_(it.threadId, CONFIG.labels.replied);
-      // Never overwrite a manually-set Response Status.
-      if (!it.response) {
-        const vals = {};
-        vals[CONFIG.monday.columns.responseStatus] = { label: R.respond };
-        setColumnValues_(it.id, vals);
-      }
+      if (!it.response) setItemFields_(it, { response: R.respond }); // never overwrite manual values
       log_('REPLY ' + it.name);
     }
   });
@@ -600,7 +428,7 @@ function runReplyWatcher() {
 
 function runDailySummary() {
   const all = fetchAllItems_();
-  const L = CONFIG.monday.outreachLabels;
+  const L = CONFIG.sheet.outreachLabels;
   const counts = { sent: 0, fu1: 0, fu2: 0, closed: 0, replied: 0, queue: 0 };
 
   all.forEach(function (it) {
@@ -608,7 +436,7 @@ function runDailySummary() {
     else if (it.outreach === L.fu1Sent) counts.fu1++;
     else if (it.outreach === L.fu2Sent) counts.fu2++;
     else if (it.outreach === L.sequenceClosed) counts.closed++;
-    if (it.response === CONFIG.monday.responseLabels.respond) counts.replied++;
+    if (it.response === CONFIG.sheet.responseLabels.respond) counts.replied++;
     if (!it.outreach && it.email && !inBlockedGroup_(it)) counts.queue++;
   });
 
@@ -622,7 +450,7 @@ function runDailySummary() {
     'Bounced today: ' + bouncedToday + '\n' +
     'Replies awaiting you (Respond): ' + counts.replied + '\n' +
     'Queue (sendable): ' + counts.queue + '\n\n' +
-    'Board totals — Email Sent: ' + counts.sent + ', FU1: ' + counts.fu1 +
+    'Totals — Email Sent: ' + counts.sent + ', FU1: ' + counts.fu1 +
     ', FU2: ' + counts.fu2 + ', Closed: ' + counts.closed + '\n';
 
   if (dry_()) { log_('[DRY] daily summary:\n' + body); }
@@ -632,7 +460,6 @@ function runDailySummary() {
       body);
   }
 
-  // Reset counters for the new day.
   props_().setProperty('counterDate', todayStamp_());
   props_().setProperty('sentToday', '0');
   props_().setProperty('bouncedToday', '0');
@@ -655,23 +482,4 @@ function SETUP() {
   ensureLabels_();
   log_('SETUP complete. Now run SETUP_POOL_REFILL(). Triggers: runSender/15m, runReplyWatcher/30m, runDailySummary/' +
     CONFIG.report.dailySummaryHour + ':00.');
-}
-
-/* =========================================================================
- * DIAGNOSTIC HELPERS  (run manually to fill Config.gs)
- * ========================================================================= */
-
-function listBoardColumns() {
-  const data = mondayQuery_(
-    'query($board:[ID!]){ boards(ids:$board){ name columns { id title type } } }',
-    { board: [CONFIG.monday.boardId] });
-  log_('Board: ' + data.boards[0].name);
-  data.boards[0].columns.forEach(function (c) { log_(c.id + '  ::  ' + c.title + '  (' + c.type + ')'); });
-}
-
-function listBoardGroups() {
-  const data = mondayQuery_(
-    'query($board:[ID!]){ boards(ids:$board){ groups { id title } } }',
-    { board: [CONFIG.monday.boardId] });
-  data.boards[0].groups.forEach(function (g) { log_(g.id + '  ::  ' + g.title); });
 }

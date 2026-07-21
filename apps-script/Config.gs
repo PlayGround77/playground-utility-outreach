@@ -1,16 +1,18 @@
 /**
  * Config.gs — Central configuration for the PlayGround Utility Outreach Engine.
  *
- * EVERYTHING that is environment-, brand-, or account-specific lives here.
- * Code.gs and PoolRefill.gs read from this object and never hard-code IDs,
- * addresses, or copy.
+ * Data store: GOOGLE SHEETS (native to Apps Script — no external API/token).
  *
- * SECRETS POLICY: API tokens are NEVER stored in this file. They live only in
- * Script Properties (File > Project properties > Script properties, or via the
- * Apps Script UI). This file only names the KEYS under which they are stored.
+ * EVERYTHING that is environment-, brand-, or account-specific lives here.
+ * Code.gs / Sheet.gs / PoolRefill.gs read from this object and never hard-code
+ * addresses, criteria, or copy.
+ *
+ * SECRETS POLICY: API tokens are NEVER stored in this file. The only external
+ * token is AppStoreSpy, kept in Script Properties (Project Settings > Script
+ * Properties). This file only names the KEY under which it is stored.
  *
  * Placeholders are written as <<LIKE_THIS>>. The engine refuses to send live
- * email while any placeholder remains (see validateConfig_ in Code.gs), so it
+ * email while any placeholder remains (see validateForLive_ in Code.gs), so it
  * is safe to deploy this file first and fill values in incrementally.
  */
 
@@ -31,39 +33,44 @@ const CONFIG = {
   },
 
   // ---------------------------------------------------------------------------
-  // 2. SCRIPT PROPERTY KEYS for secrets (values set in Script Properties only)
+  // 2. SCRIPT PROPERTY KEY for the one external secret (set in Script Properties)
   // ---------------------------------------------------------------------------
   secretKeys: {
-    monday:      'MONDAY_TOKEN',
     appStoreSpy: 'APPSTORESPY_KEY'
   },
 
   // ---------------------------------------------------------------------------
-  // 3. MONDAY.COM BOARD
-  //    Create a fresh board for PlayGround, then run listBoardColumns() and
-  //    listBoardGroups() (in Code.gs) from the Apps Script editor to print the
-  //    real IDs, and paste them here.
+  // 3. GOOGLE SHEET (the queue + CRM — single source of truth)
+  //
+  //    Two ways to bind:
+  //    (a) CONTAINER-BOUND (recommended, simplest): create the script from
+  //        inside the Sheet via Extensions > Apps Script. Leave spreadsheetId
+  //        empty — the engine uses the active spreadsheet.
+  //    (b) STANDALONE: paste the Sheet's ID (from its URL between /d/ and /edit).
+  //
+  //    Run SETUP_SHEET() once to create the tab + header row automatically.
   // ---------------------------------------------------------------------------
-  monday: {
-    apiUrl:     'https://api.monday.com/v2',
-    apiVersion: '2024-10',
-    boardId:    '<<BOARD_ID>>',
+  sheet: {
+    spreadsheetId: '',      // '' = use active spreadsheet (container-bound)
+    tabName: 'Leads',
 
-    // Column IDs — semantics mirror the reference system; IDs are per-board.
-    columns: {
-      email:          '<<COL_EMAIL>>',          // Contact Email (email column)
-      outreachStatus: '<<COL_OUTREACH_STATUS>>',// Outreach Status (status/color)
-      responseStatus: '<<COL_RESPONSE_STATUS>>',// Response Status (status/color)
-      initialDate:    '<<COL_INITIAL_DATE>>',   // Initial Email Date (date)
-      fu1Date:        '<<COL_FU1_DATE>>',        // Follow-up 1 Date (date)
-      fu2Date:        '<<COL_FU2_DATE>>',        // Follow-up 2 Date (date)
-      priority:       '<<COL_PRIORITY>>',        // Priority Score (numeric)
-      notes:          '<<COL_NOTES>>',           // Notes (text) — stores [thread:ID]
-      storeLink:      '<<COL_STORE_LINK>>',      // Store Link (link)
-      topApp:         '<<COL_TOP_APP>>'          // Top App (text) — most-installed app
+    // Column header names (row 1). SETUP_SHEET() writes these in this order.
+    headers: {
+      name:        'Studio Name',
+      email:       'Email',
+      outreach:    'Outreach Status',
+      response:    'Response Status',
+      initialDate: 'Initial Date',
+      fu1Date:     'FU1 Date',
+      fu2Date:     'FU2 Date',
+      priority:    'Priority',
+      notes:       'Notes',        // stores Gmail threadId as [thread:ID]
+      storeLink:   'Store Link',
+      topApp:      'Top App',
+      group:       'Group'         // date group / Block List / Replied / Pool DD.MM
     },
 
-    // Status labels exactly as configured on the board's status columns.
+    // Values written into the Outreach Status / Response Status cells.
     outreachLabels: {
       emailSent:      'Email Sent',
       fu1Sent:        'Follow-up 1 Sent',
@@ -77,10 +84,10 @@ const CONFIG = {
       noResponse:  'No Response'
     },
 
-    // Static group IDs (fill after board creation).
+    // Special group names (written into the Group column).
     groups: {
-      blockList: '<<GROUP_BLOCK_LIST>>', // never contacted, never refill-added
-      replied:   '<<GROUP_REPLIED>>'     // legacy/manual, excluded from sending
+      blockList: 'Block List', // never contacted, never refill-added
+      replied:   'Replied'     // legacy/manual, excluded from sending
     }
   },
 
@@ -110,7 +117,6 @@ const CONFIG = {
     revenueMaxPerMonth: 50000,// reject studios above this (too big to publish)
     pagesPerCategory: 5,      // catalog depth per category (UrlFetch quota guard)
 
-    // Quota protection (see §8 of docs — learned the hard way).
     dailyCallCap: 3000,       // hard cap on AppStoreSpy calls per day
     backoffBaseMs: 1000       // exponential backoff base on transient errors
   },
@@ -157,25 +163,23 @@ const CONFIG = {
   report: {
     summaryTo:      'contact@plygrndstudio.com',
     dailySummaryHour: 8,       // 08:00
-    poolRefillHour:   7        // 07:00
+    poolRefillHour:   7        // 07:00 (refill runs at :30)
   },
 
   // ---------------------------------------------------------------------------
   // 8. SAFETY
   // ---------------------------------------------------------------------------
   safety: {
-    // Bounce brake: once daily sends >= minSendsForBrake, pause if the bounce
-    // ratio exceeds bounceRatioMax.
-    minSendsForBrake: 20,
-    bounceRatioMax:   0.05,
+    minSendsForBrake: 20,      // bounce brake activates once daily sends >= this
+    bounceRatioMax:   0.05,    // ...and pauses if bounces/sends exceeds this
     refillFloor:      150,     // refill when sendable queue < this
     refillTarget:     250      // source ~this many new studios per refill
   },
 
   // ---------------------------------------------------------------------------
-  // 9. DRY RUN — TRUE means log-only: NO emails, NO board writes, NO labels.
-  //    Keep TRUE until you have proven the pipeline end-to-end and the owner
-  //    has given fresh explicit approval to go live (see docs §10).
+  // 9. DRY RUN — TRUE means log-only: NO emails, NO sheet writes, NO labels.
+  //    Keep TRUE until the pipeline is proven end-to-end and you have given a
+  //    fresh explicit approval to go live (see docs §10).
   // ---------------------------------------------------------------------------
   DRY_RUN: true
 };

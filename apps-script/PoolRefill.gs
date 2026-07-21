@@ -298,31 +298,22 @@ function ensureCallDate_() {
 }
 
 /* ---------------------------------------------------------------------------
- * Board writing.
+ * Sheet writing.
  * ------------------------------------------------------------------------- */
 function ensurePoolGroup_() {
-  const label = 'Pool ' + dayMonthLabel_();
-  return ensureDateGroup_(label);
+  // Groups are just Group-column values; nothing to create.
+  return 'Pool ' + dayMonthLabel_();
 }
 
-function writePoolItem_(groupId, cand) {
-  const col = CONFIG.monday.columns;
-  const vals = {};
-  if (cand.email) vals[col.email] = { email: cand.email, text: cand.email };
-  vals[col.priority] = String(cand.priority);
-  if (cand.topApp) vals[col.topApp] = cand.topApp;
-  if (cand.storeLink) vals[col.storeLink] = { url: cand.storeLink, text: 'Store' };
-
-  if (dry_()) {
-    log_('[DRY] pool add "' + cand.devName + '" <' + cand.email + '> prio=' + cand.priority +
-      ' top="' + cand.topApp + '"');
-    return;
-  }
-  mondayQuery_(
-    'mutation($board:ID!, $group:String!, $name:String!, $vals:JSON!){ ' +
-    'create_item(board_id:$board, group_id:$group, item_name:$name, column_values:$vals){ id } }',
-    { board: CONFIG.monday.boardId, group: groupId, name: cand.devName, vals: jsonString_(vals) }
-  );
+function writePoolItem_(groupName, cand) {
+  appendItem_({
+    name: cand.devName,
+    email: cand.email,
+    priority: cand.priority,
+    topApp: cand.topApp || '',
+    storeLink: cand.storeLink || '',
+    group: groupName
+  });
 }
 
 /* ---------------------------------------------------------------------------
@@ -349,7 +340,7 @@ function buildDedupIndex_(allItems) {
  */
 function preRefillDedupTest_(allItems) {
   const idx = buildDedupIndex_(allItems);
-  const blocked = allItems.filter(function (it) { return it.groupId === CONFIG.monday.groups.blockList; })[0];
+  const blocked = allItems.filter(function (it) { return it.group === CONFIG.sheet.groups.blockList; })[0];
   const sent = allItems.filter(function (it) { return !!it.outreach; })[0];
 
   if (blocked && !idx[dedupKey_(blocked.name, blocked.email)]) {
