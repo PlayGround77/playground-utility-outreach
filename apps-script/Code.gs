@@ -132,12 +132,23 @@ function latinTopApp_(topApp) {
 
 function buildSignature_() {
   const b = CONFIG.brand;
-  return '<br><br>--<br>' +
-    '<b>' + b.ownerName + '</b><br>' +
-    b.ownerTitle + ', ' + b.companyName + '<br>' +
-    b.ownerEmail + ' &nbsp;|&nbsp; ' + b.phone + '<br>' +
-    '<a href="' + b.calendarUrl + '">Book a meeting</a> &nbsp;&bull;&nbsp; ' +
-    '<a href="' + b.publishUrl + '">Publish your app</a>';
+  function real_(v) { return v && String(v).indexOf('<<') === -1 && String(v).trim() !== '' ? String(v).trim() : ''; }
+
+  const lines = [];
+  lines.push('<b>' + b.ownerName + '</b>');
+  lines.push(b.ownerTitle + ', ' + b.companyName);
+
+  const contact = [b.ownerEmail];
+  if (real_(b.phone)) contact.push(b.phone);
+  lines.push(contact.join(' &nbsp;|&nbsp; '));
+
+  const links = [];
+  if (real_(b.calendarUrl)) links.push('<a href="' + b.calendarUrl + '">Book a meeting</a>');
+  if (real_(b.publishUrl)) links.push('<a href="' + b.publishUrl + '">Publish your app</a>');
+  if (real_(b.website)) links.push('<a href="' + b.website + '">' + b.website.replace(/^https?:\/\//, '') + '</a>');
+  if (links.length) lines.push(links.join(' &nbsp;&bull;&nbsp; '));
+
+  return '<br><br>--<br>' + lines.join('<br>');
 }
 
 function tmplInitial_(item) {

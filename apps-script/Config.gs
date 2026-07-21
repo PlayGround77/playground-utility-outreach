@@ -23,13 +23,13 @@ const CONFIG = {
   // ---------------------------------------------------------------------------
   brand: {
     companyName: 'PlayGround',
-    ownerName:   '<<OWNER_FULL_NAME>>',        // e.g. "Dana Levi"
+    ownerName:   'Yogev',
     ownerTitle:  'Publishing Manager',
     ownerEmail:  'contact@plygrndstudio.com',  // the sending mailbox
-    phone:       '<<OWNER_PHONE>>',            // e.g. "+44 7000 000000"
+    phone:       '+44 7828592964',
     website:     'https://www.plygrndstudio.com',
-    publishUrl:  '<<PUBLISH_YOUR_APP_URL>>',   // your "publish your app" landing page
-    calendarUrl: '<<BOOK_A_MEETING_URL>>'      // your booking link
+    publishUrl:  '',   // optional "publish your app" landing page ('' = omit)
+    calendarUrl: ''    // optional booking link ('' = omit; add later if wanted)
   },
 
   // ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ const CONFIG = {
 
     // NEW mailbox → full warm-up ramp (zero reputation). Week index into RAMP.
     ramp: [30, 50, 75, 100],
-    rampStartDate: '<<YYYY-MM-DD>>', // Monday you go live; anchors week math
+    rampStartDate: '2026-07-27', // Monday you go live; anchors week math
 
     fetchMultiplier: 6,        // over-fetch candidates to survive guard-skips
     jitterMinSec: 2,
