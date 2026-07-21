@@ -1,0 +1,16 @@
+# clasp — never commit the real project binding or credentials
+apps-script/.clasp.json
+.clasprc.json
+*.clasp.json
+!apps-script/.clasp.json.example
+
+# secrets — tokens live only in Apps Script Script Properties, never in the repo
+.env
+*.token
+*.key
+secrets*.json
+
+# OS / editor noise
+.DS_Store
+node_modules/
+*.log
