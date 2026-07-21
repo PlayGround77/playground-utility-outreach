@@ -283,6 +283,35 @@ function fetchWithBackoff_(url, opts) {
 }
 
 /* ---------------------------------------------------------------------------
+ * DIAGNOSTIC — run once to see the RAW AppStoreSpy response for your plan, so
+ * the field mapping (mapAppStoreSpyRow_ / assApiQuery_) can be aligned exactly.
+ * Reads only; logs HTTP status + response body. The API key is NOT logged.
+ * ------------------------------------------------------------------------- */
+function TEST_APPSTORESPY() {
+  const url = CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint;
+  const key = secret_(CONFIG.secretKeys.appStoreSpy);
+  const payload = {
+    category: CONFIG.appStoreSpy.categories[0],
+    min_installs: CONFIG.appStoreSpy.installsBand.minPerMonth,
+    max_installs: CONFIG.appStoreSpy.installsBand.maxPerMonth,
+    page: 1,
+    limit: 3
+  };
+  log_('POST ' + url);
+  log_('payload: ' + JSON.stringify(payload));
+  const res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'Authorization': 'Bearer ' + key },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+  log_('HTTP ' + res.getResponseCode());
+  log_('BODY (first 2500 chars):');
+  log_(String(res.getContentText()).substring(0, 2500));
+}
+
+/* ---------------------------------------------------------------------------
  * Daily API call cap.
  * ------------------------------------------------------------------------- */
 function callBudgetOk_() {
