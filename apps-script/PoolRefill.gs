@@ -208,6 +208,11 @@ function screenRefillCandidate_(cand, addedKeys) {
  * payload from your plan's /play/apps/query response, then the rest works
  * unchanged. Priority score = installs-per-day × total apps count.
  * ------------------------------------------------------------------------- */
+/** AppStoreSpy auth: the key goes in a header named exactly "API-KEY". */
+function assHeaders_() {
+  return { 'API-KEY': secret_(CONFIG.secretKeys.appStoreSpy) };
+}
+
 function assApiQuery_(category, page) {
   countCall_();
   const url = CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint;
@@ -221,7 +226,7 @@ function assApiQuery_(category, page) {
   const res = fetchWithBackoff_(url, {
     method: 'post',
     contentType: 'application/json',
-    headers: { 'Authorization': 'Bearer ' + secret_(CONFIG.secretKeys.appStoreSpy) },
+    headers: assHeaders_(),
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   });
@@ -255,7 +260,7 @@ function fetchTopApp_(cand) {
   const res = fetchWithBackoff_(url, {
     method: 'post',
     contentType: 'application/json',
-    headers: { 'Authorization': 'Bearer ' + secret_(CONFIG.secretKeys.appStoreSpy) },
+    headers: assHeaders_(),
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   });
@@ -302,13 +307,29 @@ function TEST_APPSTORESPY() {
   const res = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
-    headers: { 'Authorization': 'Bearer ' + key },
+    headers: { 'API-KEY': key },
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   });
   log_('HTTP ' + res.getResponseCode());
   log_('BODY (first 2500 chars):');
   log_(String(res.getContentText()).substring(0, 2500));
+}
+
+/**
+ * Dump the request-body and response schemas for the Google Play endpoints, so
+ * the exact field names (incl. whether developer email is available) are known.
+ */
+function TEST_APPSTORESPY_SCHEMAS() {
+  const res = UrlFetchApp.fetch(CONFIG.appStoreSpy.apiUrl + '/openapi.json', { muteHttpExceptions: true });
+  const spec = JSON.parse(res.getContentText());
+  const schemas = spec.components.schemas || {};
+  Object.keys(schemas).forEach(function (k) {
+    if (/PlayApp|PlayDev|SearchBody|Filter|ListResponse|ListItem/i.test(k)) {
+      log_('=== ' + k + ' ===');
+      log_(JSON.stringify(schemas[k]).substring(0, 2200));
+    }
+  });
 }
 
 /**
