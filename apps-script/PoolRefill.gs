@@ -311,6 +311,47 @@ function TEST_APPSTORESPY() {
   log_(String(res.getContentText()).substring(0, 2500));
 }
 
+/**
+ * Try several common auth schemes and report which one AppStoreSpy accepts.
+ * Run once; the variant that logs "HTTP 200" is the correct one. Read-only.
+ */
+function TEST_APPSTORESPY_AUTH() {
+  const base = CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint;
+  const key = secret_(CONFIG.secretKeys.appStoreSpy);
+  const payload = JSON.stringify({
+    category: CONFIG.appStoreSpy.categories[0],
+    min_installs: CONFIG.appStoreSpy.installsBand.minPerMonth,
+    max_installs: CONFIG.appStoreSpy.installsBand.maxPerMonth,
+    page: 1, limit: 3
+  });
+
+  const variants = [
+    { label: 'header Authorization: Bearer', url: base, headers: { 'Authorization': 'Bearer ' + key } },
+    { label: 'header Authorization: raw',    url: base, headers: { 'Authorization': key } },
+    { label: 'header Authorization: Token',  url: base, headers: { 'Authorization': 'Token ' + key } },
+    { label: 'header X-API-Key',             url: base, headers: { 'X-API-Key': key } },
+    { label: 'header apikey',                url: base, headers: { 'apikey': key } },
+    { label: 'query ?apiKey=',               url: base + '?apiKey=' + encodeURIComponent(key), headers: {} },
+    { label: 'query ?api_key=',              url: base + '?api_key=' + encodeURIComponent(key), headers: {} },
+    { label: 'query ?token=',                url: base + '?token=' + encodeURIComponent(key), headers: {} },
+    { label: 'query ?key=',                  url: base + '?key=' + encodeURIComponent(key), headers: {} }
+  ];
+
+  variants.forEach(function (v) {
+    let code, body;
+    try {
+      const res = UrlFetchApp.fetch(v.url, {
+        method: 'post', contentType: 'application/json',
+        headers: v.headers, payload: payload, muteHttpExceptions: true
+      });
+      code = res.getResponseCode();
+      body = String(res.getContentText()).substring(0, 140).replace(/\s+/g, ' ');
+    } catch (e) { code = 'ERR'; body = String(e).substring(0, 140); }
+    log_((code === 200 ? '✅ ' : '   ') + v.label + '  ->  HTTP ' + code + '  ::  ' + body);
+  });
+  log_('Done. The variant marked ✅ (HTTP 200) is the correct auth method.');
+}
+
 /* ---------------------------------------------------------------------------
  * Daily API call cap.
  * ------------------------------------------------------------------------- */
