@@ -376,6 +376,50 @@ function TEST_SOURCING_ONE() {
 }
 
 /**
+ * Diagnose why a query returns 0 rows. Prints the valid category/type enum
+ * values (free, from the spec), then tries several filter combinations and
+ * reports how many apps each returns + a sample app's downloads_month, so the
+ * category token and installs band can be calibrated. Costs ~6 API credits.
+ */
+function TEST_SOURCING_FILTERS() {
+  // 1) FREE — valid enum values from the OpenAPI spec.
+  try {
+    const spec = JSON.parse(UrlFetchApp.fetch(CONFIG.appStoreSpy.apiUrl + '/openapi.json', { muteHttpExceptions: true }).getContentText());
+    const s = spec.components.schemas || {};
+    ['PlayCategory', 'TypeEnum', 'PlaySortEnum'].forEach(function (k) {
+      if (s[k]) log_('ENUM ' + k + ': ' + JSON.stringify(s[k].enum || s[k]).substring(0, 1600));
+    });
+  } catch (e) { log_('enum fetch failed: ' + e); }
+
+  // 2) PAID — narrow down which filter empties the results.
+  const band = CONFIG.appStoreSpy.installsBand;
+  const variants = [
+    ['band+cat+type', { published: true, category_type: 'APP', category: 'TOOLS', downloads_month: { gte: band.minPerMonth, lte: band.maxPerMonth } }],
+    ['cat+type',      { published: true, category_type: 'APP', category: 'TOOLS' }],
+    ['cat only',      { published: true, category: 'TOOLS' }],
+    ['type only',     { published: true, category_type: 'APP' }],
+    ['published only',{ published: true }],
+    ['name weather',  { name: 'weather' }]
+  ];
+  variants.forEach(function (v) {
+    try {
+      const res = UrlFetchApp.fetch(CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint, {
+        method: 'post', contentType: 'application/json', headers: assHeaders_(),
+        payload: JSON.stringify({ limit: 3, page: 1, sort: '-downloads_month', country: 'US', filter: v[1] }),
+        muteHttpExceptions: true
+      });
+      const code = res.getResponseCode();
+      let body = {}; try { body = JSON.parse(res.getContentText()); } catch (e) {}
+      const n = (body.data && body.data.length) || 0;
+      const a = body.data && body.data[0];
+      const sample = a ? ' sample={name:"' + a.name + '", downloads_month:' + a.downloads_month + ', dev_id:' + a.developer_id + '}' : '';
+      log_(v[0] + '  -> HTTP ' + code + '  count=' + n + '  total_count=' + body.total_count +
+        (code !== 200 ? ('  body=' + String(res.getContentText()).substring(0, 160)) : sample));
+    } catch (e) { log_(v[0] + '  ERR ' + e); }
+  });
+}
+
+/**
  * Dump the request-body and response schemas for the Google Play endpoints, so
  * the exact field names (incl. whether developer email is available) are known.
  */
