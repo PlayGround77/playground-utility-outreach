@@ -95,7 +95,7 @@ function runPoolRefillResume() {
       if (!callBudgetOk_()) return finalizeRefill_(state, 'daily API cap reached');
 
       const category = cats[state.catIndex];
-      const rows = assApiQuery_(category, state.page); // may throw on API failure
+      const rows = assQueryApps_(category, state.page, 100); // may throw on API failure
 
       if (!rows.length || state.page > CONFIG.appStoreSpy.pagesPerCategory) {
         state.catIndex++;
@@ -104,24 +104,29 @@ function runPoolRefillResume() {
       }
 
       rows.forEach(function (raw) {
-        const cand = mapAppStoreSpyRow_(raw);
         state.screened++;
+        const appRow = mapAppRow_(raw);
+        if (!appRow.devId) { bumpReject_(state, 'no_developer_id'); return; }
+
+        // One developer can own several in-band apps; process each dev once.
+        const devKey = 'dev:' + appRow.devId;
+        if (addedKeys.has(devKey)) return;
+        addedKeys.add(devKey);
+
+        // Cheap name check before spending a developer-fetch credit.
+        if (/\bpublish(er|ing)?\b/i.test(appRow.devName)) { bumpReject_(state, 'publisher'); return; }
+
+        let dev;
+        try { dev = assGetDeveloper_(appRow.devId); }
+        catch (e) { bumpReject_(state, 'dev_fetch_error'); return; }
+
+        const cand = buildCandidate_(appRow, dev);
         const reason = screenRefillCandidate_(cand, addedKeys);
-        if (reason) { state.rejects[reason] = (state.rejects[reason] || 0) + 1; return; }
-
-        // Keeper — fetch top app, then write to board.
-        try {
-          const top = fetchTopApp_(cand);
-          cand.topApp = top.name;
-          cand.topAppCategory = top.category;
-        } catch (e) { cand.topApp = ''; cand.topAppCategory = ''; }
-
-        // Top-app sanity can only run once we know the top app.
-        const topReason = screenReason_({ name: cand.devName, email: cand.email, notes: '', topApp: cand.topApp, topAppCategory: cand.topAppCategory });
-        if (topReason) { state.rejects[topReason] = (state.rejects[topReason] || 0) + 1; return; }
+        if (reason) { bumpReject_(state, reason); return; }
 
         writePoolItem_(state.groupId, cand);
         addedKeys.add(dedupKey_(cand.devName, cand.email));
+        addedKeys.add('email:' + cand.email.toLowerCase());
         state.added++;
       });
 
@@ -189,85 +194,112 @@ function screenRefillCandidate_(cand, addedKeys) {
   if (cand.revenuePerMonth > c.revenueMaxPerMonth) return 'revenue_too_high';
 
   // Shared-email farm: same email already claimed by a different dev name.
-  if (addedKeys.has('email:' + cand.email.toLowerCase())) {
-    // (soft index — see note in buildDedupIndex_)
-  }
+  if (addedKeys.has('email:' + cand.email.toLowerCase())) return 'shared_email_farm';
 
-  // The shared firewall (China, junk email, non-app names, brand impersonation).
-  const reason = screenReason_({ name: cand.devName, email: cand.email, notes: '' });
+  // The shared firewall (China, junk email, non-app names, brand impersonation,
+  // and top-app sanity now that the top app is known).
+  const reason = screenReason_({
+    name: cand.devName, email: cand.email, notes: '',
+    topApp: cand.topApp, topAppCategory: cand.topAppCategory
+  });
   if (reason) return reason;
 
   return '';
 }
 
+function bumpReject_(state, reason) {
+  state.rejects[reason] = (state.rejects[reason] || 0) + 1;
+}
+
 /* ---------------------------------------------------------------------------
- * AppStoreSpy access.
- *
- * NOTE: AppStoreSpy's response shape is account-specific. mapAppStoreSpyRow_ and
- * fetchTopApp_ isolate every field name in one place — align them with the real
- * payload from your plan's /play/apps/query response, then the rest works
- * unchanged. Priority score = installs-per-day × total apps count.
+ * AppStoreSpy access. Wired to the real API contract (OpenAPI verified):
+ *   • Auth: header "API-KEY".
+ *   • POST /play/apps/query  body = { limit, page, sort, country, fields, filter }
+ *     — `filter` (SearchFilterPlay) is REQUIRED. category_type:"APP" excludes
+ *     games; downloads_month is a {gte,lte} ValueRange. Response: { data:[NewPlayApp], total_count }.
+ *   • GET /play/developers/{id} → PlayDev { name, email[], total_apps, ipd,
+ *     revenue, top_apps[], url, ... }.
+ * Priority score = ipd × total_apps.
  * ------------------------------------------------------------------------- */
+
 /** AppStoreSpy auth: the key goes in a header named exactly "API-KEY". */
 function assHeaders_() {
   return { 'API-KEY': secret_(CONFIG.secretKeys.appStoreSpy) };
 }
 
-function assApiQuery_(category, page) {
+/** POST /play/apps/query — utility apps (not games) in the installs band. */
+function assQueryApps_(category, page, limit) {
   countCall_();
   const url = CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint;
   const payload = {
-    category: category,
-    min_installs: CONFIG.appStoreSpy.installsBand.minPerMonth,
-    max_installs: CONFIG.appStoreSpy.installsBand.maxPerMonth,
-    page: page,
-    limit: 100
+    limit: limit || 100,
+    page: page || 1,
+    sort: '-downloads_month',
+    country: 'US',
+    fields: ['id', 'bundle', 'name', 'category', 'category_type',
+      'downloads_month', 'downloads_daily', 'revenue_month',
+      'developer_name', 'developer_id', 'url_appstorespy'],
+    filter: {
+      published: true,
+      category_type: 'APP',          // excludes games
+      category: category,
+      downloads_month: {
+        gte: CONFIG.appStoreSpy.installsBand.minPerMonth,
+        lte: CONFIG.appStoreSpy.installsBand.maxPerMonth
+      }
+    }
   };
   const res = fetchWithBackoff_(url, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: assHeaders_(),
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
+    method: 'post', contentType: 'application/json',
+    headers: assHeaders_(), payload: JSON.stringify(payload), muteHttpExceptions: true
   });
   const body = JSON.parse(res.getContentText());
-  return body.apps || body.results || body.data || [];
+  return (body && body.data) || [];
 }
 
-function mapAppStoreSpyRow_(row) {
-  const dev = row.developer || row.dev || {};
-  const ipd = Number(row.installs_per_day || row.ipd || 0);
-  const appsCount = Number(dev.apps_count || row.developer_apps_count || 0);
+/** Normalize one app row (NewPlayApp) into the fields we use. */
+function mapAppRow_(row) {
+  const bundle = row.bundle || row.id || '';
   return {
-    devName: dev.name || row.developer_name || row.developer || '',
-    email: (dev.email || row.developer_email || '').toLowerCase(),
-    installsPerMonth: Number(row.installs_per_month || row.installs || ipd * 30 || 0),
-    installsPerDay: ipd,
-    appsCount: appsCount,
-    revenuePerMonth: Number(row.revenue_per_month || dev.revenue || 0),
-    storeLink: row.url || row.store_link || row.play_url || '',
-    priority: ipd * appsCount,
-    topApp: '',
-    topAppCategory: ''
+    devId: String(row.developer_id || ''),
+    devName: String(row.developer_name || ''),
+    appName: String(row.name || ''),
+    appCategory: String(row.category || ''),
+    appInstallsMonth: Number(row.downloads_month || 0),
+    revenueMonth: Number(row.revenue_month || 0),
+    storeLink: bundle
+      ? 'https://play.google.com/store/apps/details?id=' + bundle
+      : String(row.url_appstorespy || '')
   };
 }
 
-function fetchTopApp_(cand) {
-  // Most-installed app for this developer. Align endpoint/fields to your plan.
+/** GET /play/developers/{id} → PlayDev. */
+function assGetDeveloper_(devId) {
   countCall_();
-  const url = CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint;
-  const payload = { developer: cand.devName, sort: 'installs', limit: 1 };
-  const res = fetchWithBackoff_(url, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: assHeaders_(),
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  });
-  const body = JSON.parse(res.getContentText());
-  const apps = body.apps || body.results || body.data || [];
-  const top = apps[0] || {};
-  return { name: top.title || top.name || '', category: top.category || top.genre || '' };
+  const url = CONFIG.appStoreSpy.apiUrl + '/play/developers/' + encodeURIComponent(devId);
+  const res = fetchWithBackoff_(url, { method: 'get', headers: assHeaders_(), muteHttpExceptions: true });
+  return JSON.parse(res.getContentText()) || {};
+}
+
+/** Combine an app row + its developer into a screening/writing candidate. */
+function buildCandidate_(appRow, dev) {
+  const emails = dev.email || dev.emails || [];
+  const email = (emails && emails.length) ? String(emails[0]).toLowerCase() : '';
+  const totalApps = Number(dev.total_apps || 0);
+  const ipd = Number(dev.ipd || 0);
+  return {
+    devName: appRow.devName || String(dev.name || ''),
+    devId: appRow.devId,
+    email: email,
+    installsPerMonth: appRow.appInstallsMonth || (ipd * 30),
+    installsPerDay: ipd,
+    appsCount: totalApps,
+    revenuePerMonth: appRow.revenueMonth || 0,
+    storeLink: appRow.storeLink || String(dev.url || ''),
+    priority: ipd * totalApps,
+    topApp: appRow.appName || '',        // highest-download in-band app of this dev
+    topAppCategory: appRow.appCategory || ''
+  };
 }
 
 function fetchWithBackoff_(url, opts) {
@@ -288,32 +320,59 @@ function fetchWithBackoff_(url, opts) {
 }
 
 /* ---------------------------------------------------------------------------
- * DIAGNOSTIC — run once to see the RAW AppStoreSpy response for your plan, so
- * the field mapping (mapAppStoreSpyRow_ / assApiQuery_) can be aligned exactly.
- * Reads only; logs HTTP status + response body. The API key is NOT logged.
+ * DIAGNOSTIC — run once to confirm the /play/apps/query call returns HTTP 200
+ * with the corrected request body. Logs HTTP status + response body.
+ * The API key is NOT logged.
  * ------------------------------------------------------------------------- */
 function TEST_APPSTORESPY() {
   const url = CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint;
   const key = secret_(CONFIG.secretKeys.appStoreSpy);
   const payload = {
-    category: CONFIG.appStoreSpy.categories[0],
-    min_installs: CONFIG.appStoreSpy.installsBand.minPerMonth,
-    max_installs: CONFIG.appStoreSpy.installsBand.maxPerMonth,
-    page: 1,
-    limit: 3
+    limit: 3, page: 1, sort: '-downloads_month', country: 'US',
+    fields: ['id', 'bundle', 'name', 'category', 'category_type',
+      'downloads_month', 'developer_name', 'developer_id'],
+    filter: {
+      published: true, category_type: 'APP',
+      category: CONFIG.appStoreSpy.categories[0],
+      downloads_month: {
+        gte: CONFIG.appStoreSpy.installsBand.minPerMonth,
+        lte: CONFIG.appStoreSpy.installsBand.maxPerMonth
+      }
+    }
   };
   log_('POST ' + url);
   log_('payload: ' + JSON.stringify(payload));
   const res = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'API-KEY': key },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
+    method: 'post', contentType: 'application/json',
+    headers: { 'API-KEY': key }, payload: JSON.stringify(payload), muteHttpExceptions: true
   });
   log_('HTTP ' + res.getResponseCode());
   log_('BODY (first 2500 chars):');
   log_(String(res.getContentText()).substring(0, 2500));
+}
+
+/**
+ * End-to-end mini test (~2 API credits): query one utility app, fetch its
+ * developer, build + screen the candidate, and log every step. Proves the whole
+ * sourcing chain and shows the real field values. Writes NOTHING to the sheet.
+ */
+function TEST_SOURCING_ONE() {
+  const cat = CONFIG.appStoreSpy.categories[0];
+  const rows = assQueryApps_(cat, 1, 3);
+  log_('apps returned: ' + rows.length + ' (category ' + cat + ')');
+  if (!rows.length) { log_('No apps returned — widen the band or check the category enum.'); return; }
+
+  log_('raw app[0]: ' + JSON.stringify(rows[0]).substring(0, 1200));
+  const appRow = mapAppRow_(rows[0]);
+  log_('mapped app: ' + JSON.stringify(appRow));
+  if (!appRow.devId) { log_('⚠️ No developer_id on the app row — tell me, needs an alternate lookup.'); return; }
+
+  const dev = assGetDeveloper_(appRow.devId);
+  log_('raw developer: ' + JSON.stringify(dev).substring(0, 1200));
+
+  const cand = buildCandidate_(appRow, dev);
+  log_('CANDIDATE: ' + JSON.stringify(cand));
+  log_('screen result: "' + (screenRefillCandidate_(cand, new Set()) || 'PASS') + '"');
 }
 
 /**
