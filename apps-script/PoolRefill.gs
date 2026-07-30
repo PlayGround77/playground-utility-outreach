@@ -227,26 +227,31 @@ function assHeaders_() {
   return { 'API-KEY': secret_(CONFIG.secretKeys.appStoreSpy) };
 }
 
-/** POST /play/apps/query — utility apps (not games) in the installs band. */
+/**
+ * POST /play/apps/query — utility apps (not games) in the installs band.
+ * NOTE: AppStoreSpy's `downloads_month` is unreliable (often 0/null), so the
+ * band is applied to `downloads_daily` (install velocity ≈ installs/day). The
+ * configured monthly band is converted to a daily band (÷30).
+ */
 function assQueryApps_(category, page, limit) {
   countCall_();
+  const band = CONFIG.appStoreSpy.installsBand;
+  const dailyMin = Math.max(1, Math.round(band.minPerMonth / 30));
+  const dailyMax = Math.round(band.maxPerMonth / 30);
   const url = CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint;
   const payload = {
     limit: limit || 100,
     page: page || 1,
-    sort: '-downloads_month',
+    sort: '-downloads_daily',
     country: 'US',
     fields: ['id', 'bundle', 'name', 'category', 'category_type',
-      'downloads_month', 'downloads_daily', 'revenue_month',
+      'downloads_daily', 'downloads_exact', 'downloads_mark', 'revenue_month',
       'developer_name', 'developer_id', 'url_appstorespy'],
     filter: {
       published: true,
       category_type: 'APP',          // excludes games
       category: category,
-      downloads_month: {
-        gte: CONFIG.appStoreSpy.installsBand.minPerMonth,
-        lte: CONFIG.appStoreSpy.installsBand.maxPerMonth
-      }
+      downloads_daily: { gte: dailyMin, lte: dailyMax }
     }
   };
   const res = fetchWithBackoff_(url, {
@@ -260,12 +265,14 @@ function assQueryApps_(category, page, limit) {
 /** Normalize one app row (NewPlayApp) into the fields we use. */
 function mapAppRow_(row) {
   const bundle = row.bundle || row.id || '';
+  const dd = Number(row.downloads_daily || 0);
   return {
     devId: String(row.developer_id || ''),
     devName: String(row.developer_name || ''),
     appName: String(row.name || ''),
     appCategory: String(row.category || ''),
-    appInstallsMonth: Number(row.downloads_month || 0),
+    appInstallsDaily: dd,
+    appInstallsMonth: dd * 30,
     revenueMonth: Number(row.revenue_month || 0),
     storeLink: bundle
       ? 'https://play.google.com/store/apps/details?id=' + bundle
@@ -327,17 +334,15 @@ function fetchWithBackoff_(url, opts) {
 function TEST_APPSTORESPY() {
   const url = CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint;
   const key = secret_(CONFIG.secretKeys.appStoreSpy);
+  const band = CONFIG.appStoreSpy.installsBand;
   const payload = {
-    limit: 3, page: 1, sort: '-downloads_month', country: 'US',
+    limit: 3, page: 1, sort: '-downloads_daily', country: 'US',
     fields: ['id', 'bundle', 'name', 'category', 'category_type',
-      'downloads_month', 'developer_name', 'developer_id'],
+      'downloads_daily', 'developer_name', 'developer_id'],
     filter: {
       published: true, category_type: 'APP',
       category: CONFIG.appStoreSpy.categories[0],
-      downloads_month: {
-        gte: CONFIG.appStoreSpy.installsBand.minPerMonth,
-        lte: CONFIG.appStoreSpy.installsBand.maxPerMonth
-      }
+      downloads_daily: { gte: Math.round(band.minPerMonth / 30), lte: Math.round(band.maxPerMonth / 30) }
     }
   };
   log_('POST ' + url);
