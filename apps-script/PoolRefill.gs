@@ -420,6 +420,46 @@ function TEST_SOURCING_FILTERS() {
 }
 
 /**
+ * Calibration run (~5 API credits). Answers two questions:
+ *  (1) which download field + band actually selects mid-size utility apps, and
+ *  (2) whether developer_id (and emails) come back at the app level.
+ */
+function TEST_SOURCING_CALIBRATE() {
+  const SAFE = ['id', 'bundle', 'name', 'category', 'category_type',
+    'downloads_month', 'downloads_daily', 'downloads_exact', 'downloads_mark', 'developer_name'];
+
+  function q(label, payload) {
+    const res = UrlFetchApp.fetch(CONFIG.appStoreSpy.apiUrl + CONFIG.appStoreSpy.endpoint, {
+      method: 'post', contentType: 'application/json', headers: assHeaders_(),
+      payload: JSON.stringify(payload), muteHttpExceptions: true
+    });
+    const code = res.getResponseCode();
+    let body = {}; try { body = JSON.parse(res.getContentText()); } catch (e) {}
+    const data = body.data || [];
+    log_('### ' + label + '  -> HTTP ' + code + '  count=' + data.length +
+      (code !== 200 ? ('  body=' + String(res.getContentText()).substring(0, 200)) : ''));
+    data.forEach(function (a) {
+      log_('   {name:"' + a.name + '", dm:' + a.downloads_month + ', dd:' + a.downloads_daily +
+        ', dexact:' + a.downloads_exact + ', dmark:' + a.downloads_mark +
+        ', dev_id:' + a.developer_id + ', emails:' + JSON.stringify(a.emails) + '}');
+    });
+    if (data[0]) log_('   FULL row[0]: ' + JSON.stringify(data[0]).substring(0, 900));
+  }
+
+  const base = { limit: 5, page: 1, country: 'US', fields: SAFE };
+  const F = { published: true, category_type: 'APP', category: 'TOOLS' };
+
+  // Smallest TOOLS apps first — reveals the real magnitude of each field.
+  q('smallest by downloads_month (asc)', Object.assign({}, base, { sort: 'downloads_month', filter: F }));
+  // Band applied to different candidate fields.
+  q('band downloads_month 15k-300k', Object.assign({}, base, { sort: '-downloads_month', filter: Object.assign({}, F, { downloads_month: { gte: 15000, lte: 300000 } }) }));
+  q('band downloads_daily 500-10000', Object.assign({}, base, { sort: '-downloads_daily', filter: Object.assign({}, F, { downloads_daily: { gte: 500, lte: 10000 } }) }));
+  q('band downloads_exact 15k-300k', Object.assign({}, base, { sort: '-downloads_exact', filter: Object.assign({}, F, { downloads_exact: { gte: 15000, lte: 300000 } }) }));
+  // Does developer_id / emails come back at the app level?
+  q('with developer_id+emails', Object.assign({}, base, { limit: 2, sort: '-downloads_month', fields: SAFE.concat(['developer_id', 'emails']), filter: F }));
+}
+
+/**
  * Dump the request-body and response schemas for the Google Play endpoints, so
  * the exact field names (incl. whether developer email is available) are known.
  */
