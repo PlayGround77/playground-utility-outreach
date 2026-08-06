@@ -70,14 +70,13 @@ async function runPoolRefill(force) {
           const reason = screenCandidate(cand, index);
           if (reason) { bump(reason); continue; }
 
-          if (!config.DRY_RUN) {
-            await db.insertLead({
-              name: cand.devName, email: cand.email, priority: cand.priority,
-              topApp: cand.topApp, storeLink: cand.storeLink, grp, developerId: cand.devId
-            });
-          } else {
-            log(`[DRY] add "${cand.devName}" <${cand.email}> prio=${cand.priority} top="${cand.topApp}"`);
-          }
+          // Sourcing always writes to our own DB (safe + needed for review).
+          // Only EMAIL sending is gated by DRY_RUN.
+          await db.insertLead({
+            name: cand.devName, email: cand.email, priority: cand.priority,
+            topApp: cand.topApp, storeLink: cand.storeLink, grp, developerId: cand.devId
+          });
+          log(`add "${cand.devName}" <${cand.email}> prio=${cand.priority} top="${cand.topApp}"`);
           index.add(dedupKey(cand.devName, cand.email));
           index.add('email:' + cand.email.toLowerCase());
           added++;
