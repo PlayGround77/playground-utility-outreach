@@ -4,10 +4,13 @@ const express = require('express');
 const crypto = require('crypto');
 const config = require('./config');
 const db = require('./db');
+const criteria = require('./criteria');
 
 const { runSender } = require('./jobs/sender');
 const { runReplyWatcher } = require('./jobs/replywatcher');
 const { runPoolRefill } = require('./jobs/refill');
+
+function num(n) { return Number(n || 0).toLocaleString('en-US'); }
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
@@ -52,6 +55,11 @@ function page(title, inner) {
   form{display:inline}
   .wrap{overflow-x:auto}
   a{color:LinkText}
+  .crit{margin:.6rem 0;border:1px solid #8884;border-radius:6px;padding:.5rem .8rem}
+  .crit summary{cursor:pointer}
+  .crit form{display:block}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.6rem;margin:.5rem 0}
+  input{font:inherit;padding:.25rem}
 </style></head><body>${inner}</body></html>`;
 }
 
@@ -79,23 +87,54 @@ function makeApp() {
       }
       const sentToday = await db.countToday(['initial', 'fu1', 'fu2']);
 
+      const storeLink = (l) => l.store_link
+        ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">↗ store</a>` : '';
+      const appCell = (l) => l.store_link
+        ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
+        : esc(l.top_app || '');
+
       const rows = leads.slice(0, 500).map((l) => `<tr>
         <td>${esc(l.name)}</td>
-        <td>${l.store_link ? `<a href="${esc(l.store_link)}" target="_blank">${esc(l.email)}</a>` : esc(l.email)}</td>
+        <td>${appCell(l)}</td>
+        <td>${esc(l.category)}</td>
+        <td style="text-align:right">${num(l.installs_day)}</td>
+        <td style="text-align:right">${num(l.installs_month)}</td>
+        <td style="text-align:right">${num(l.apps_count)}</td>
+        <td style="text-align:right">$${num(l.revenue_month)}</td>
+        <td style="text-align:right">${num(l.priority)}</td>
+        <td>${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''}</td>
+        <td>${storeLink(l)}</td>
         <td>${esc(l.outreach)}</td>
         <td><b>${esc(l.response)}</b></td>
-        <td>${esc(l.top_app)}</td>
-        <td>${esc(l.priority)}</td>
         <td>${esc(l.grp)}</td>
-        <td>
-          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.bookedCall)}"><button>📞 Booked</button></form>
-          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.notRelevant)}"><button>🚫 Not rel.</button></form>
-          <form method="post" action="/action/${l.id}/block"><button>⛔ Block</button></form>
+        <td style="white-space:nowrap">
+          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.bookedCall)}"><button>📞</button></form>
+          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.notRelevant)}"><button>🚫</button></form>
+          <form method="post" action="/action/${l.id}/block"><button>⛔</button></form>
         </td></tr>`).join('');
 
       const mode = config.DRY_RUN
         ? '<span class="pill dry">DRY RUN — nothing is sent</span>'
         : '<span class="pill live">LIVE — sending real email</span>';
+
+      const crit = await criteria.get();
+      const critForm = `
+        <details class="crit"><summary><b>🔎 Search criteria</b> — edit and save; takes effect on the next “Source now”</summary>
+        <form method="post" action="/criteria">
+          <p><label>Categories (comma-separated Google Play APP categories)<br>
+            <input name="categories" value="${esc(crit.categories.join(','))}" style="width:100%"></label></p>
+          <div class="grid">
+            <label>Installs/month — min<br><input name="installsMin" value="${esc(crit.installsMin)}"></label>
+            <label>Installs/month — max<br><input name="installsMax" value="${esc(crit.installsMax)}"></label>
+            <label>Min apps per studio<br><input name="minApps" value="${esc(crit.minApps)}"></label>
+            <label>Max revenue/month ($)<br><input name="revenueMax" value="${esc(crit.revenueMax)}"></label>
+            <label>Pages per category<br><input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
+            <label>Source target (studios)<br><input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
+          </div>
+          <p><button>Save criteria</button></p>
+        </form>
+        <p style="opacity:.6;font-size:.8rem">Valid categories: ${criteria.VALID_CATEGORIES.join(', ')}</p>
+        </details>`;
 
       res.send(page('Outreach', `
         <h1>${esc(config.brand.companyName)} Utility Outreach</h1>
@@ -114,11 +153,12 @@ function makeApp() {
           <span class="stat">Closed: <b>${stat.closed}</b></span>
           <span class="stat">Blocked: <b>${stat.blocked}</b></span>
         </div>
+        ${critForm}
         <div class="wrap"><table>
-          <tr><th>Studio</th><th>Email</th><th>Outreach</th><th>Response</th><th>Top App</th><th>Priority</th><th>Group</th><th>Actions</th></tr>
-          ${rows || '<tr><td colspan="8">No leads yet — click “Source now”.</td></tr>'}
+          <tr><th>Studio</th><th>App</th><th>Category</th><th>Inst/day</th><th>Inst/mo</th><th>Apps</th><th>Rev/mo</th><th>Priority</th><th>Email</th><th>Store</th><th>Outreach</th><th>Response</th><th>Group</th><th>Actions</th></tr>
+          ${rows || '<tr><td colspan="14">No leads yet — click “Source now”.</td></tr>'}
         </table></div>
-        <p style="opacity:.6">Showing up to 500 rows. Mode is controlled by the DRY_RUN env var in Railway.</p>
+        <p style="opacity:.6">Showing up to 500 rows. Sending mode is controlled by the DRY_RUN env var in Railway.</p>
       `));
     } catch (e) {
       res.status(500).send('Error: ' + esc(e.message));
@@ -131,6 +171,11 @@ function makeApp() {
   });
   app.post('/action/:id/block', async (req, res) => {
     await db.updateLead(Number(req.params.id), { grp: config.groups.blockList });
+    res.redirect('/');
+  });
+
+  app.post('/criteria', async (req, res) => {
+    try { await criteria.set(req.body || {}); } catch (e) { console.error('[criteria]', e.message); }
     res.redirect('/');
   });
 

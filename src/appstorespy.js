@@ -44,10 +44,11 @@ async function fetchWithBackoff(url, options) {
  * downloads_month is unreliable, so the band is applied to downloads_daily
  * (monthly band / 30). Returns an array of app rows.
  */
-async function queryApps(category, page, limit) {
+async function queryApps(category, page, limit, band) {
   await countCall();
-  const dailyMin = Math.max(1, Math.round(A.installsBand.minPerMonth / 30));
-  const dailyMax = Math.round(A.installsBand.maxPerMonth / 30);
+  const b = band || A.installsBand;
+  const dailyMin = Math.max(1, Math.round(b.minPerMonth / 30));
+  const dailyMax = Math.round(b.maxPerMonth / 30);
   const body = {
     limit: limit || 100,
     page: page || 1,

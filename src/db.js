@@ -31,6 +31,11 @@ async function init() {
       notes         TEXT NOT NULL DEFAULT '',
       store_link    TEXT NOT NULL DEFAULT '',
       top_app       TEXT NOT NULL DEFAULT '',
+      category      TEXT NOT NULL DEFAULT '',
+      installs_day  BIGINT NOT NULL DEFAULT 0,
+      installs_month BIGINT NOT NULL DEFAULT 0,
+      revenue_month BIGINT NOT NULL DEFAULT 0,
+      apps_count    INTEGER NOT NULL DEFAULT 0,
       grp           TEXT NOT NULL DEFAULT '',
       developer_id  TEXT NOT NULL DEFAULT '',
       message_id    TEXT NOT NULL DEFAULT '',
@@ -38,6 +43,16 @@ async function init() {
       updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // Migrations for an already-created table (safe no-ops if columns exist).
+  for (const col of [
+    "category TEXT NOT NULL DEFAULT ''",
+    'installs_day BIGINT NOT NULL DEFAULT 0',
+    'installs_month BIGINT NOT NULL DEFAULT 0',
+    'revenue_month BIGINT NOT NULL DEFAULT 0',
+    'apps_count INTEGER NOT NULL DEFAULT 0'
+  ]) {
+    await q(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ${col};`);
+  }
   await q(`
     CREATE TABLE IF NOT EXISTS events (
       id          SERIAL PRIMARY KEY,
@@ -62,9 +77,13 @@ async function allLeads() {
 
 async function insertLead(lead) {
   const r = await q(
-    `INSERT INTO leads (name,email,priority,top_app,store_link,grp,developer_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-    [lead.name, lead.email, lead.priority || 0, lead.topApp || '', lead.storeLink || '', lead.grp || '', lead.developerId || '']
+    `INSERT INTO leads
+       (name,email,priority,top_app,store_link,grp,developer_id,
+        category,installs_day,installs_month,revenue_month,apps_count)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+    [lead.name, lead.email, lead.priority || 0, lead.topApp || '', lead.storeLink || '',
+      lead.grp || '', lead.developerId || '', lead.category || '',
+      lead.installsDay || 0, lead.installsMonth || 0, lead.revenueMonth || 0, lead.appsCount || 0]
   );
   return r.rows[0].id;
 }
