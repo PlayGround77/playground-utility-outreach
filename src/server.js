@@ -108,9 +108,9 @@ function makeApp() {
         <td><b>${esc(l.response)}</b></td>
         <td>${esc(l.grp)}</td>
         <td style="white-space:nowrap">
-          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.bookedCall)}"><button>📞</button></form>
-          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.notRelevant)}"><button>🚫</button></form>
-          <form method="post" action="/action/${l.id}/block"><button>⛔</button></form>
+          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.bookedCall)}"><button title="Mark this lead as 'Booked a call' (they responded / booked a meeting)">📞 Booked</button></form>
+          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.notRelevant)}"><button title="Mark this lead as 'Not Relevant' (stops follow-ups; stays in the list)">🚫 Not&nbsp;rel.</button></form>
+          <form method="post" action="/action/${l.id}/block"><button title="Block: move to Block List — never contacted again, removed from sending and future sourcing">⛔ Block</button></form>
         </td></tr>`).join('');
 
       const mode = config.DRY_RUN
@@ -158,6 +158,13 @@ function makeApp() {
           <tr><th>Studio</th><th>App</th><th>Category</th><th>Inst/day</th><th>Inst/mo</th><th>Apps</th><th>Rev/mo</th><th>Priority</th><th>Email</th><th>Store</th><th>Outreach</th><th>Response</th><th>Group</th><th>Actions</th></tr>
           ${rows || '<tr><td colspan="14">No leads yet — click “Source now”.</td></tr>'}
         </table></div>
+        <p style="opacity:.75">
+          <b>Actions:</b>
+          <b>📞 Booked</b> = mark Response “Booked a call” (hot lead) ·
+          <b>🚫 Not rel.</b> = mark Response “Not Relevant” (stops follow-ups) ·
+          <b>⛔ Block</b> = never contact again + remove from sending &amp; future sourcing.
+          Replies are detected automatically (Response “Respond”).
+        </p>
         <p style="opacity:.6">Showing up to 500 rows. Sending mode is controlled by the DRY_RUN env var in Railway.</p>
       `));
     } catch (e) {
