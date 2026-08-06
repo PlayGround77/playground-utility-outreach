@@ -11,7 +11,6 @@ const { runReplyWatcher } = require('./jobs/replywatcher');
 const { runPoolRefill } = require('./jobs/refill');
 
 function num(n) { return Number(n || 0).toLocaleString('en-US'); }
-
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -23,12 +22,8 @@ function safeEqual(a, b) {
 }
 
 function basicAuth(req, res, next) {
-  if (!config.dashboard.pass) {
-    res.status(503).send('Dashboard locked: set DASHBOARD_PASS env var.');
-    return;
-  }
-  const h = req.headers.authorization || '';
-  const [scheme, encoded] = h.split(' ');
+  if (!config.dashboard.pass) { res.status(503).send('Dashboard locked: set DASHBOARD_PASS env var.'); return; }
+  const [scheme, encoded] = (req.headers.authorization || '').split(' ');
   if (scheme === 'Basic' && encoded) {
     const [user, pass] = Buffer.from(encoded, 'base64').toString().split(':');
     if (safeEqual(user, config.dashboard.user) && safeEqual(pass, config.dashboard.pass)) return next();
@@ -36,157 +31,207 @@ function basicAuth(req, res, next) {
   res.set('WWW-Authenticate', 'Basic realm="Outreach"').status(401).send('Auth required');
 }
 
-function page(title, inner) {
-  return `<!doctype html><html><head><meta charset="utf-8">
+/* ---- status option lists + colors ---- */
+const OUTREACH_OPTS = ['', 'Email Sent', 'Follow-up 1 Sent', 'Follow-up 2 Sent', 'Sequence Closed'];
+const RESPONSE_OPTS = ['', 'Respond', 'Booked a call', 'Not Relevant', 'No Response'];
+const STATUS_COLOR = {
+  'Email Sent': '#3b82f6', 'Follow-up 1 Sent': '#f59e0b', 'Follow-up 2 Sent': '#f97316',
+  'Sequence Closed': '#6b7280', 'Respond': '#10b981', 'Booked a call': '#059669',
+  'Not Relevant': '#ef4444', 'No Response': '#6b7280'
+};
+function optionList(opts, current) {
+  return opts.map((o) =>
+    `<option value="${esc(o)}"${o === current ? ' selected' : ''}>${esc(o || '—')}</option>`).join('');
+}
+function selectCell(id, name, opts, current) {
+  const c = STATUS_COLOR[current] || '';
+  const style = c ? ` style="border-left:4px solid ${c}"` : '';
+  return `<form method="post" action="/action/${id}/set" class="sel">
+    <select name="${name}" onchange="this.form.submit()"${style}>${optionList(opts, current)}</select>
+  </form>`;
+}
+
+function shell(inner) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)}</title>
+<title>${esc(config.brand.companyName)} Outreach</title>
 <style>
-  :root{color-scheme:light dark}
-  body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:1rem;background:Canvas;color:CanvasText}
-  h1{font-size:1.2rem;margin:.2rem 0}
-  .bar{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin:.5rem 0 1rem}
-  .pill{padding:.15rem .5rem;border-radius:999px;border:1px solid;font-size:.8rem}
-  .live{background:#fee;color:#900;border-color:#c00}.dry{background:#eef;color:#036;border-color:#69c}
-  table{border-collapse:collapse;width:100%;font-size:.85rem}
-  th,td{border:1px solid #8884;padding:.3rem .4rem;text-align:left;vertical-align:top}
-  th{position:sticky;top:0;background:Canvas}
-  .stat{display:inline-block;margin-right:1rem}
-  button{font:inherit;padding:.2rem .5rem;cursor:pointer}
+  :root{
+    color-scheme:light dark;
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#1a1c1f; --muted:#6b7280;
+    --line:#e5e7eb; --accent:#4f46e5; --accent-ink:#fff; --chip:#eef2ff; --hover:#f3f4f6;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0f1115; --panel:#171a21; --ink:#e7e9ee; --muted:#9aa3b2;
+    --line:#2a2f3a; --accent:#6366f1; --chip:#1e2230; --hover:#1c2029;
+  }}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .container{max-width:1400px;margin:0 auto;padding:1.2rem}
+  header{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;margin-bottom:1rem}
+  h1{font-size:1.25rem;margin:0;font-weight:650}
+  .pill{padding:.2rem .6rem;border-radius:999px;font-size:.78rem;font-weight:600;border:1px solid}
+  .live{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+  .dry{background:#e0f2fe;color:#075985;border-color:#7dd3fc}
+  @media (prefers-color-scheme:dark){.live{background:#3b1414;color:#fca5a5}.dry{background:#0c2a3a;color:#7dd3fc}}
+  .toolbar{margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap}
+  button{font:inherit;padding:.4rem .7rem;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;transition:.15s}
+  button:hover{background:var(--hover)}
+  button.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:600}
   form{display:inline}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:.6rem;margin:.4rem 0 1rem}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:.7rem .9rem}
+  .tile .n{font-size:1.5rem;font-weight:700;line-height:1}
+  .tile .l{color:var(--muted);font-size:.75rem;margin-top:.25rem;text-transform:uppercase;letter-spacing:.03em}
+  details.crit{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:.6rem 1rem;margin-bottom:1rem}
+  details.crit summary{cursor:pointer;font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.7rem;margin:.7rem 0}
+  label{display:block;font-size:.8rem;color:var(--muted)}
+  input{font:inherit;width:100%;padding:.4rem;margin-top:.2rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
   .wrap{overflow-x:auto}
-  a{color:LinkText}
-  .crit{margin:.6rem 0;border:1px solid #8884;border-radius:6px;padding:.5rem .8rem}
-  .crit summary{cursor:pointer}
-  .crit form{display:block}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.6rem;margin:.5rem 0}
-  input{font:inherit;padding:.25rem}
-</style></head><body>${inner}</body></html>`;
+  table{border-collapse:collapse;width:100%;font-size:.85rem}
+  th,td{padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{position:sticky;top:0;background:var(--panel);font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);z-index:1}
+  tbody tr:hover{background:var(--hover)}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  select{font:inherit;padding:.25rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+  .sel{display:block;margin:0}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .muted{color:var(--muted)}
+  .legend{color:var(--muted);font-size:.82rem;margin:.8rem 0 0}
+</style></head><body><div class="container">${inner}</div></body></html>`;
 }
 
 function makeApp() {
   const app = express();
   app.use(express.urlencoded({ extended: false }));
-
   app.get('/health', (req, res) => res.send('ok'));
-
   app.use(basicAuth);
 
   app.get('/', async (req, res) => {
     try {
       const leads = await db.allLeads();
       const S = config.statuses;
-      const stat = { queue: 0, sent: 0, fu1: 0, fu2: 0, closed: 0, replied: 0, blocked: 0 };
+      const st = { queue: 0, sent: 0, fu1: 0, fu2: 0, closed: 0, replied: 0, blocked: 0 };
       for (const l of leads) {
-        if (l.grp === config.groups.blockList) stat.blocked++;
-        else if (!l.outreach && l.email) stat.queue++;
-        if (l.outreach === S.emailSent) stat.sent++;
-        else if (l.outreach === S.fu1Sent) stat.fu1++;
-        else if (l.outreach === S.fu2Sent) stat.fu2++;
-        else if (l.outreach === S.sequenceClosed) stat.closed++;
-        if (l.response === config.responses.respond) stat.replied++;
+        if (l.grp === config.groups.blockList) st.blocked++;
+        else if (!l.outreach && l.email) st.queue++;
+        if (l.outreach === S.emailSent) st.sent++;
+        else if (l.outreach === S.fu1Sent) st.fu1++;
+        else if (l.outreach === S.fu2Sent) st.fu2++;
+        else if (l.outreach === S.sequenceClosed) st.closed++;
+        if (l.response === config.responses.respond) st.replied++;
       }
       const sentToday = await db.countToday(['initial', 'fu1', 'fu2']);
+      const crit = await criteria.get();
 
-      const storeLink = (l) => l.store_link
-        ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">↗ store</a>` : '';
       const appCell = (l) => l.store_link
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
         : esc(l.top_app || '');
 
       const rows = leads.slice(0, 500).map((l) => `<tr>
-        <td>${esc(l.name)}</td>
+        <td><b>${esc(l.name)}</b></td>
         <td>${appCell(l)}</td>
-        <td>${esc(l.category)}</td>
-        <td style="text-align:right">${num(l.installs_day)}</td>
-        <td style="text-align:right">${num(l.installs_month)}</td>
-        <td style="text-align:right">${num(l.apps_count)}</td>
-        <td style="text-align:right">$${num(l.revenue_month)}</td>
-        <td style="text-align:right">${num(l.priority)}</td>
+        <td class="muted">${esc(l.category)}</td>
+        <td class="num">${num(l.installs_day)}</td>
+        <td class="num">${num(l.installs_month)}</td>
+        <td class="num">${num(l.apps_count)}</td>
+        <td class="num">$${num(l.revenue_month)}</td>
+        <td class="num">${num(l.priority)}</td>
         <td>${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''}</td>
-        <td>${storeLink(l)}</td>
-        <td>${esc(l.outreach)}</td>
-        <td><b>${esc(l.response)}</b></td>
-        <td>${esc(l.grp)}</td>
-        <td style="white-space:nowrap">
-          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.bookedCall)}"><button title="Mark this lead as 'Booked a call' (they responded / booked a meeting)">📞 Booked</button></form>
-          <form method="post" action="/action/${l.id}/respond"><input type="hidden" name="value" value="${esc(config.responses.notRelevant)}"><button title="Mark this lead as 'Not Relevant' (stops follow-ups; stays in the list)">🚫 Not&nbsp;rel.</button></form>
-          <form method="post" action="/action/${l.id}/block"><button title="Block: move to Block List — never contacted again, removed from sending and future sourcing">⛔ Block</button></form>
-        </td></tr>`).join('');
+        <td>${l.store_link ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">↗</a>` : ''}</td>
+        <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
+        <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
+        <td class="muted">${esc(l.grp)}</td>
+        <td><form method="post" action="/action/${l.id}/block"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form></td>
+      </tr>`).join('');
 
       const mode = config.DRY_RUN
-        ? '<span class="pill dry">DRY RUN — nothing is sent</span>'
-        : '<span class="pill live">LIVE — sending real email</span>';
+        ? '<span class="pill dry">DRY RUN · nothing is sent</span>'
+        : '<span class="pill live">LIVE · sending real email</span>';
 
-      const crit = await criteria.get();
-      const critForm = `
-        <details class="crit"><summary><b>🔎 Search criteria</b> — edit and save; takes effect on the next “Source now”</summary>
-        <form method="post" action="/criteria">
-          <p><label>Categories (comma-separated Google Play APP categories)<br>
-            <input name="categories" value="${esc(crit.categories.join(','))}" style="width:100%"></label></p>
-          <div class="grid">
-            <label>Installs/month — min<br><input name="installsMin" value="${esc(crit.installsMin)}"></label>
-            <label>Installs/month — max<br><input name="installsMax" value="${esc(crit.installsMax)}"></label>
-            <label>Min apps per studio<br><input name="minApps" value="${esc(crit.minApps)}"></label>
-            <label>Max revenue/month ($)<br><input name="revenueMax" value="${esc(crit.revenueMax)}"></label>
-            <label>Pages per category<br><input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
-            <label>Source target (studios)<br><input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
+      const tile = (n, l) => `<div class="tile"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+
+      res.send(shell(`
+        <header>
+          <h1>${esc(config.brand.companyName)} Utility Outreach</h1>
+          ${mode}
+          <div class="toolbar">
+            <form method="post" action="/run/refill"><button class="primary">Source now</button></form>
+            <form method="post" action="/run/send"><button>Send tick</button></form>
+            <form method="post" action="/run/watch"><button>Check replies</button></form>
           </div>
-          <p><button>Save criteria</button></p>
-        </form>
-        <p style="opacity:.6;font-size:.8rem">Valid categories: ${criteria.VALID_CATEGORIES.join(', ')}</p>
-        </details>`;
+        </header>
 
-      res.send(page('Outreach', `
-        <h1>${esc(config.brand.companyName)} Utility Outreach</h1>
-        <div class="bar">${mode}
-          <form method="post" action="/run/refill"><button>Source now</button></form>
-          <form method="post" action="/run/send"><button>Send tick now</button></form>
-          <form method="post" action="/run/watch"><button>Check replies now</button></form>
+        <div class="tiles">
+          ${tile(sentToday, 'Sent today')}
+          ${tile(st.queue, 'Queue')}
+          ${tile(st.sent, 'Email sent')}
+          ${tile(st.fu1, 'Follow-up 1')}
+          ${tile(st.fu2, 'Follow-up 2')}
+          ${tile(st.replied, 'Replied')}
+          ${tile(st.closed, 'Closed')}
+          ${tile(st.blocked, 'Blocked')}
         </div>
-        <div class="bar">
-          <span class="stat">Sent today: <b>${sentToday}</b></span>
-          <span class="stat">Queue: <b>${stat.queue}</b></span>
-          <span class="stat">Sent: <b>${stat.sent}</b></span>
-          <span class="stat">FU1: <b>${stat.fu1}</b></span>
-          <span class="stat">FU2: <b>${stat.fu2}</b></span>
-          <span class="stat">Replied: <b>${stat.replied}</b></span>
-          <span class="stat">Closed: <b>${stat.closed}</b></span>
-          <span class="stat">Blocked: <b>${stat.blocked}</b></span>
-        </div>
-        ${critForm}
-        <div class="wrap"><table>
-          <tr><th>Studio</th><th>App</th><th>Category</th><th>Inst/day</th><th>Inst/mo</th><th>Apps</th><th>Rev/mo</th><th>Priority</th><th>Email</th><th>Store</th><th>Outreach</th><th>Response</th><th>Group</th><th>Actions</th></tr>
-          ${rows || '<tr><td colspan="14">No leads yet — click “Source now”.</td></tr>'}
+
+        <details class="crit">
+          <summary>🔎 Search criteria — edit &amp; save; affects the next “Source now”</summary>
+          <form method="post" action="/criteria">
+            <label>Categories (comma-separated Google Play APP categories)
+              <input name="categories" value="${esc(crit.categories.join(','))}"></label>
+            <div class="grid">
+              <label>Installs / month — min<input name="installsMin" value="${esc(crit.installsMin)}"></label>
+              <label>Installs / month — max<input name="installsMax" value="${esc(crit.installsMax)}"></label>
+              <label>Min apps per studio<input name="minApps" value="${esc(crit.minApps)}"></label>
+              <label>Max revenue / month ($)<input name="revenueMax" value="${esc(crit.revenueMax)}"></label>
+              <label>Pages per category<input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
+              <label>Source target (studios)<input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
+            </div>
+            <button class="primary">Save criteria</button>
+            <span class="muted" style="font-size:.78rem">Valid: ${criteria.VALID_CATEGORIES.join(', ')}</span>
+          </form>
+        </details>
+
+        <div class="card wrap"><table>
+          <thead><tr>
+            <th>Studio</th><th>App</th><th>Category</th><th>Inst/day</th><th>Inst/mo</th>
+            <th>Apps</th><th>Rev/mo</th><th>Priority</th><th>Email</th><th>Store</th>
+            <th>Outreach status</th><th>Response status</th><th>Group</th><th></th>
+          </tr></thead>
+          <tbody>${rows || '<tr><td colspan="14" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
         </table></div>
-        <p style="opacity:.75">
-          <b>Actions:</b>
-          <b>📞 Booked</b> = mark Response “Booked a call” (hot lead) ·
-          <b>🚫 Not rel.</b> = mark Response “Not Relevant” (stops follow-ups) ·
-          <b>⛔ Block</b> = never contact again + remove from sending &amp; future sourcing.
-          Replies are detected automatically (Response “Respond”).
+
+        <p class="legend">
+          Change <b>Outreach</b> / <b>Response</b> status directly from the dropdowns (saved instantly).
+          <b>⛔ Block</b> removes a studio from sending &amp; future sourcing.
+          Replies are detected automatically and set Response to “Respond”.
+          Sending mode is controlled by the <code>DRY_RUN</code> env var in Railway.
         </p>
-        <p style="opacity:.6">Showing up to 500 rows. Sending mode is controlled by the DRY_RUN env var in Railway.</p>
+        <p class="legend">Showing up to 500 of ${leads.length} leads.</p>
       `));
     } catch (e) {
       res.status(500).send('Error: ' + esc(e.message));
     }
   });
 
-  app.post('/action/:id/respond', async (req, res) => {
-    await db.updateLead(Number(req.params.id), { response: String(req.body.value || '') });
+  app.post('/action/:id/set', async (req, res) => {
+    const patch = {};
+    if ('outreach' in req.body) patch.outreach = String(req.body.outreach);
+    if ('response' in req.body) patch.response = String(req.body.response);
+    if (Object.keys(patch).length) await db.updateLead(Number(req.params.id), patch);
     res.redirect('/');
   });
   app.post('/action/:id/block', async (req, res) => {
     await db.updateLead(Number(req.params.id), { grp: config.groups.blockList });
     res.redirect('/');
   });
-
   app.post('/criteria', async (req, res) => {
     try { await criteria.set(req.body || {}); } catch (e) { console.error('[criteria]', e.message); }
     res.redirect('/');
   });
 
-  // Fire-and-forget job triggers (jobs can run long; don't block the response).
   app.post('/run/refill', (req, res) => { runPoolRefill(true).catch((e) => console.error(e)); res.redirect('/'); });
   app.post('/run/send', (req, res) => { runSender().catch((e) => console.error(e)); res.redirect('/'); });
   app.post('/run/watch', (req, res) => { runReplyWatcher().catch((e) => console.error(e)); res.redirect('/'); });
