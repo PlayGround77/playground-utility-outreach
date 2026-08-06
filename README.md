@@ -1,55 +1,54 @@
 # PlayGround Utility Outreach
 
-Fully automated cold-outreach pipeline for recruiting mobile **utility-app**
-studios into PlayGround's publishing program.
+Automated cold-outreach pipeline for recruiting mobile **utility-app** studios
+into PlayGround's publishing program. Runs as a Node.js service on **Railway**.
 
 ```
-AppStoreSpy (sourcing) → Google Sheet (queue + CRM) → Gmail (sending)
-     ↑                                                     ↓
-     └───────── auto-refill when queue < 150 ──── reply detection loop
+AppStoreSpy (sourcing) → Postgres (queue + CRM) → Gmail (SMTP send / IMAP read)
+     ↑                                                      ↓
+     └────────── auto-refill when queue < 150 ──── reply detection loop
+                         ↕
+                 web dashboard (view leads, work replies)
 ```
 
-- Sources utility-app studios from AppStoreSpy against defined criteria
-- Screens them through a layered rejection firewall (see `apps-script/Guards.gs`)
-- Emails a personalized 3-touch sequence (initial → FU1 → FU2 → close), all in one Gmail thread
-- Detects replies/bounces automatically, updates the sheet, stops sequences
+- Sources utility-app studios from AppStoreSpy (games excluded) in an installs band
+- Screens them through a layered rejection firewall (`src/guards.js`)
+- Emails a personalized 3-touch sequence (initial → FU1 → FU2 → close) in one Gmail thread
+- Detects replies/bounces over IMAP, updates the record, stops sequences
 - Refills its own queue when it runs low
-- Reports daily by email
-- The human's only jobs: answer replies, approve lists, watch daily summaries
+- A password-protected dashboard shows the pipeline and lets you set statuses
+- Everything updates by `git push` — no copy-paste into any editor
 
-Everything runs inside **Google Apps Script** on your own Google account. The
-only external service that needs a token is AppStoreSpy — Gmail and Google
-Sheets are native, so there is nothing extra to "connect".
+## Deploy (Railway)
+
+See **[SETUP.md](SETUP.md)** for the full walkthrough. In short:
+
+1. Create a Google **App Password** for the sending mailbox (needs 2-Step Verification).
+2. On Railway: **New Project → Deploy from GitHub repo** (this repo), then **add a Postgres** service.
+3. Set the service **Variables** (see `.env.example`): `GMAIL_USER`, `GMAIL_APP_PASSWORD`,
+   `APPSTORESPY_KEY`, `DASHBOARD_PASS`, and keep `DRY_RUN=true`.
+4. Open the dashboard (the service URL), click **Source now**, then **Send tick now** — all logged, nothing sent while `DRY_RUN=true`.
+5. When you've approved going live, set `DRY_RUN=false` in Railway and redeploy.
 
 ## Layout
 
-| File | Role |
+| Path | Role |
 |---|---|
-| `apps-script/Config.gs` | All brand, sheet, criteria, and schedule settings (fill placeholders) |
-| `apps-script/Guards.gs` | Shared screening firewall (China policy, junk email, brand impersonation, top-app sanity) |
-| `apps-script/Sheet.gs` | Google Sheets data layer (read/update/append rows) |
-| `apps-script/Code.gs` | Sending engine, follow-up cadence, reply watcher, daily summary, setup |
-| `apps-script/PoolRefill.gs` | AppStoreSpy sourcing with chunked chaining + whole-sheet dedup |
-| `apps-script/appsscript.json` | Manifest (Gmail Advanced Service, Sheets scope, timezone) |
-| `docs/SYSTEM.md` | Full technical & operational reference |
-| `SETUP.md` | Step-by-step deployment guide |
-
-## Quick start
-
-1. Create a dedicated Gmail mailbox for PlayGround outreach and a Google Sheet.
-2. Create the Apps Script project (ideally from **Extensions → Apps Script**
-   inside the Sheet so it binds automatically) and paste these files.
-3. Enable the Gmail Advanced Service; put `APPSTORESPY_KEY` in **Script Properties**.
-4. Run `SETUP_SHEET()` to build the sheet's header row.
-5. Fill every `<<PLACEHOLDER>>` in `Config.gs` (brand details + `rampStartDate`).
-6. Keep `CONFIG.DRY_RUN = true`, run `runSender()` once, and read the logs.
-7. Only after a clean dry run **and** explicit sign-off, flip `DRY_RUN` to `false`.
-
-Full instructions: [`SETUP.md`](SETUP.md).
+| `src/config.js` | All settings from environment variables |
+| `src/guards.js` | Screening firewall (China policy, junk email, brand impersonation, top-app sanity) |
+| `src/appstorespy.js` | AppStoreSpy client (query utility apps + fetch developer) |
+| `src/templates.js` | Email copy + signature |
+| `src/email.js` | Gmail SMTP send + IMAP reply/bounce scan |
+| `src/db.js` | Postgres schema + queries (the queue + CRM) |
+| `src/jobs/*` | `sender`, `replywatcher`, `refill`, `summary` |
+| `src/scheduler.js` | Cron: sender/15m, watcher/30m, summary 08:00, refill 07:30 |
+| `src/server.js` | Web dashboard (basic auth) |
+| `scripts/test-appstorespy.js` | Sourcing self-test (`npm run test:appstorespy`) |
+| `docs/SYSTEM.md` | Full conceptual reference (rules, cadence, guards) |
+| `apps-script/` | Legacy Google Apps Script implementation (superseded by this Node app) |
 
 ## Safety
 
-Dry-run default, a bounce brake, a warm-up ramp for new mailboxes, a config
-placeholder guard that blocks live sends while any `<<...>>` remains, and a hard
-approval rule: **the `DRY_RUN` flag is never flipped to `false` without a fresh,
-explicit approval.** Read `docs/SYSTEM.md §10` before going live.
+Dry-run default, a bounce brake, a warm-up ramp for the new mailbox, and a hard
+rule: **`DRY_RUN` is only set to `false` by a deliberate Railway variable change
+after explicit sign-off.** Read `docs/SYSTEM.md §10` before going live.

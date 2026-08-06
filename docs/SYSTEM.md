@@ -3,8 +3,16 @@
 **Version:** 1.0
 **Owner:** PlayGround (contact@plygrndstudio.com)
 **Purpose:** full reference for anyone operating or extending this system. Every
-mechanism, rule, and lesson is spelled out. All settings live in
-`apps-script/Config.gs`; this document explains the *why* behind them.
+mechanism, rule, and lesson is spelled out; this document explains the *why*.
+
+> **Implementation note:** the live system is the **Node.js app in `src/`**,
+> deployed on Railway with **Postgres** as the queue/CRM and **Gmail (SMTP send /
+> IMAP read)** for email — see [`README.md`](../README.md) and [`SETUP.md`](../SETUP.md).
+> The sections below describe the concepts (guards, cadence, statuses, workflow)
+> which are identical across implementations. Where this doc says "sheet",
+> "board", or `Config.gs`, read it as the Postgres `leads` table / env-var config.
+> The `apps-script/` folder is the earlier Google Apps Script version, kept for
+> reference only.
 
 ---
 

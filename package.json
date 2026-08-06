@@ -1,0 +1,23 @@
+{
+  "name": "playground-utility-outreach",
+  "version": "1.0.0",
+  "description": "Automated cold-outreach pipeline for mobile utility-app studios (AppStoreSpy -> Postgres -> Gmail), for PlayGround. Runs on Railway.",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "sourcing:once": "node src/jobs/refill.js --once",
+    "send:once": "node src/jobs/sender.js --once",
+    "test:appstorespy": "node scripts/test-appstorespy.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "imapflow": "^1.0.164",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.14",
+    "pg": "^8.12.0"
+  }
+}

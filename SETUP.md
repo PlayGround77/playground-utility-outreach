@@ -1,84 +1,78 @@
-# Deployment Guide — PlayGround Utility Outreach
+# Deployment Guide — PlayGround Utility Outreach (Railway)
 
-Follow these in order. Nothing here assumes prior knowledge of the system.
-Data lives in a **Google Sheet**; the engine runs in **Google Apps Script**.
+Follow these in order. No code copy-paste — you deploy by connecting this repo.
 
-## 1. Mailbox
+## 1. Gmail App Password
 
-Use a dedicated Google Workspace mailbox for PlayGround outreach (e.g.
-`contact@plygrndstudio.com`). It is a **new** sending identity, so the engine
-uses the full warm-up ramp `30 → 50 → 75 → 100` sends/day over the first weeks
-(`CONFIG.sender.ramp`). **Log into this Google account** for everything below —
-the engine sends from whichever account owns the script.
+The app sends and reads email from your mailbox (e.g. `contact@plygrndstudio.com`)
+using a Google **App Password**:
 
-## 2. Google Sheet + Apps Script project
+1. That Google account → **Manage your Google Account → Security**.
+2. Turn on **2-Step Verification** (required for app passwords).
+3. **Security → App passwords** → create one (name it "Outreach"). Copy the
+   16-character password (shown as `xxxx xxxx xxxx xxxx`).
 
-Recommended (simplest, no IDs to copy):
+## 2. Create the Railway project
 
-1. Create a new Google Sheet (name it e.g. "Utility Outreach").
-2. In that Sheet: **Extensions → Apps Script**. This opens a project already
-   bound to the Sheet (so `CONFIG.sheet.spreadsheetId` can stay empty).
-3. Create the code files and paste the repo contents into each:
-   `Config`, `Guards`, `Sheet`, `Code`, `PoolRefill`, and edit the manifest
-   (`appsscript.json`) to match the repo's.
-4. **Services → + → Gmail API** (enables the `Gmail` advanced service used for
-   raw-MIME threading).
+1. Sign in to [railway.app](https://railway.app).
+2. **New Project → Deploy from GitHub repo** → pick
+   `PlayGround77/playground-utility-outreach` (branch
+   `claude/publishing-outreach-system-glky2c`). Railway auto-detects Node and builds it.
+3. In the project, **New → Database → Add PostgreSQL**. Railway creates
+   `DATABASE_URL` and (once you reference it) injects it into the app service.
+   - In the app service **Variables**, add a reference so `DATABASE_URL` points
+     at the Postgres service (Railway offers this as a one-click reference).
 
-(Standalone alternative: create the project at script.google.com and paste the
-Sheet's ID — from its URL between `/d/` and `/edit` — into
-`CONFIG.sheet.spreadsheetId`.)
+## 3. Set the service Variables
 
-## 3. Secret (Script Properties only)
+App service → **Variables** → add (see `.env.example` for the full list):
 
-Project Settings → Script Properties → add:
-
-| Key | Value |
+| Variable | Value |
 |---|---|
+| `GMAIL_USER` | `contact@plygrndstudio.com` |
+| `GMAIL_APP_PASSWORD` | the 16-char app password from step 1 (spaces ok) |
 | `APPSTORESPY_KEY` | your AppStoreSpy API key |
+| `DASHBOARD_PASS` | a strong password for the dashboard |
+| `DRY_RUN` | `true` (keep it true for now) |
+| `SUMMARY_TO` | `contact@plygrndstudio.com` |
+| `RAMP_START_DATE` | the Monday you plan to go live, e.g. `2026-08-10` |
 
-Never put this in code, chat, or committed files. (No Monday token needed —
-the sheet is native.)
+Brand defaults (PlayGround / Yogev / your phone) are already baked in; override
+with `OWNER_NAME`, `OWNER_PHONE`, `PUBLISH_URL`, `CALENDAR_URL` if needed.
 
-## 4. Build the sheet
+## 4. First boot
 
-From the Apps Script editor, run **`SETUP_SHEET()`** once. It creates the
-`Leads` tab with the correct header row (Studio Name, Email, Outreach Status,
-Response Status, Initial Date, FU1 Date, FU2 Date, Priority, Notes, Store Link,
-Top App, Group) and freezes the header. Grant the permissions it requests.
+After it deploys, open the service **URL** (Railway → Settings → Networking →
+Generate Domain). You'll get a browser login prompt — user `admin`, password =
+`DASHBOARD_PASS`. The dashboard loads empty.
 
-Two special values you'll type into the **Group** column by hand when needed:
-`Block List` (never contacted) and `Replied` (excluded from sending). Date
-groups (`DD.MM`) and `Pool DD.MM` are filled automatically.
+## 5. Prove sourcing (uses a few AppStoreSpy credits)
 
-## 5. Fill Config.gs
+Two options:
+- **Dashboard:** click **Source now**. Watch Railway **Deploy Logs** — you'll see
+  `[refill] [DRY] add "…"` lines (nothing is written to the DB while `DRY_RUN=true`).
+- **Self-test:** Railway → the service → **Settings → Deploy** shell, or locally:
+  `npm run test:appstorespy` — prints one real candidate end-to-end.
 
-Fill the remaining `<<PLACEHOLDERS>>`: brand details (owner name, phone,
-publish URL, calendar URL) and `rampStartDate` (the Monday you go live). The
-engine refuses to send live while any `<<...>>` remains.
+## 6. Prove sending (dry)
 
-## 6. Align the AppStoreSpy mapping
+Click **Send tick now**. Logs show `[sender] [DRY] NEW -> …` with the exact
+email that *would* be sent. Nothing leaves the mailbox while `DRY_RUN=true`.
 
-`PoolRefill.gs` isolates every AppStoreSpy field name in `mapAppStoreSpyRow_()`
-and `fetchTopApp_()`. Run one refill in dry mode, look at a raw row in the logs,
-and adjust those two functions to your plan's actual response shape.
+## 7. Go live (gated)
 
-## 7. Dry run
+When you've reviewed a sourced list and are ready:
 
-With `CONFIG.DRY_RUN = true`:
-- Add a couple of test rows to the sheet (name + email + a Priority number).
-- Run `runSender()` — logs `[DRY] NEW → …`, writes nothing.
-- Run `runReplyWatcher()` and `runPoolRefill()` similarly.
+1. Set `DRY_RUN=false` in Railway Variables → the service redeploys.
+2. The schedulers now run automatically: sourcing 07:30, sending every 15 min
+   inside 09:00–18:00 Asia/Jerusalem (Mon–Fri), reply check every 30 min, daily
+   summary email at 08:00.
+3. Watch the first day's summary email and the dashboard counters.
 
-Confirm the candidate selection, screening, and templates look right.
+To pause at any time: set `DRY_RUN=true` again (redeploys, stops all sending).
 
-## 8. Install triggers
+## Ongoing
 
-Run `SETUP()` (installs sender/15m, reply watcher/30m, daily summary/08:00 and
-creates Gmail labels). Then **immediately** run `SETUP_POOL_REFILL()` — `SETUP()`
-deletes all triggers, so the refill trigger must be re-added after it.
-
-## 9. Go live (gated)
-
-Flip `CONFIG.DRY_RUN = false` **only** after a clean dry run and a fresh,
-explicit approval. Watch the first day's 08:00 summary and the Gmail label
-counters (`Outreach/Sent`, `/FU1`, `/Replied`, `/Bounced`).
+- Work replies from the dashboard: **📞 Booked** / **🚫 Not rel.** set the
+  Response status; **⛔ Block** moves a studio to the Block List (never contacted again).
+- All code changes: edit and `git push` — Railway rebuilds automatically.
