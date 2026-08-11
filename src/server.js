@@ -98,6 +98,12 @@ function shell(inner) {
   th,td{padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
   th{position:sticky;top:0;background:var(--panel);font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);z-index:1}
   tbody tr:hover{background:var(--hover)}
+  td.ell{max-width:190px;overflow:hidden;text-overflow:ellipsis}
+  /* Pin the Studio (first) and Actions (last) columns so they stay on screen. */
+  th:first-child,td:first-child{position:sticky;left:0;background:var(--panel);z-index:2;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+  th:last-child,td:last-child{position:sticky;right:0;background:var(--panel);z-index:2;box-shadow:-6px 0 6px -6px rgba(0,0,0,.25)}
+  thead th:first-child,thead th:last-child{z-index:3}
+  tbody tr:hover td:first-child,tbody tr:hover td:last-child{background:var(--hover)}
   td.num{text-align:right;font-variant-numeric:tabular-nums}
   select{font:inherit;padding:.25rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
   .sel{display:block;margin:0}
@@ -137,15 +143,15 @@ function makeApp() {
         : esc(l.top_app || '');
 
       const rows = leads.slice(0, 500).map((l) => `<tr>
-        <td><b>${esc(l.name)}</b></td>
-        <td>${appCell(l)}</td>
+        <td title="${esc(l.name)}"><b>${esc(l.name)}</b></td>
+        <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}</td>
         <td class="muted">${esc(l.category)}</td>
         <td class="num">${num(l.installs_day)}</td>
         <td class="num">${num(l.installs_month)}</td>
         <td class="num">${num(l.apps_count)}</td>
         <td class="num">$${num(l.revenue_month)}</td>
         <td class="num">${num(l.priority)}</td>
-        <td>${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''}</td>
+        <td class="ell" title="${esc(l.email)}">${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''}</td>
         <td>${l.store_link ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">↗</a>` : ''}</td>
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
@@ -211,6 +217,7 @@ function makeApp() {
           </form>
         </details>
 
+        <p class="legend">The <b>Studio</b> and <b>Actions</b> (✉ Send / ⛔ Block) columns stay pinned; scroll the table sideways for status &amp; details.</p>
         <div class="card wrap"><table>
           <thead><tr>
             <th>Studio</th><th>App</th><th>Category</th><th>Inst/day</th><th>Inst/mo</th>
