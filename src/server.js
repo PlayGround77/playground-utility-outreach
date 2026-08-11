@@ -6,7 +6,7 @@ const config = require('./config');
 const db = require('./db');
 const criteria = require('./criteria');
 
-const { runSender } = require('./jobs/sender');
+const { runSender, sendOne } = require('./jobs/sender');
 const { runReplyWatcher } = require('./jobs/replywatcher');
 const { runPoolRefill } = require('./jobs/refill');
 
@@ -80,6 +80,8 @@ function shell(inner) {
   button{font:inherit;padding:.4rem .7rem;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;transition:.15s}
   button:hover{background:var(--hover)}
   button.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:600}
+  button.send{border-color:#10b98188;color:#059669;font-weight:600}
+  button.send:hover{background:#10b9811a}
   form{display:inline}
   .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:.6rem;margin:.4rem 0 1rem}
   .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:.7rem .9rem}
@@ -148,7 +150,10 @@ function makeApp() {
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
         <td class="muted">${esc(l.grp)}</td>
-        <td><form method="post" action="/action/${l.id}/block"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form></td>
+        <td style="white-space:nowrap">
+          <form method="post" action="/action/${l.id}/send" onsubmit="return confirm('Send the next email in the sequence to this lead now?')"><button class="send" title="Send the next email (initial → FU1 → FU2) to THIS lead now. Respects DRY_RUN.">✉ Send</button></form>
+          <form method="post" action="/action/${l.id}/block"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form>
+        </td>
       </tr>`).join('');
 
       const mode = config.DRY_RUN
@@ -221,7 +226,8 @@ function makeApp() {
           Replies are detected automatically and set Response to “Respond”.
         </p>
         <p class="legend">
-          <b>MANUAL send</b> = the scheduler never sends on its own; you send by clicking <b>Send tick</b> (your approval).
+          <b>MANUAL send</b> = the scheduler never sends on its own. Send per lead with the row’s <b>✉ Send</b> button
+          (sends that studio’s next email: initial → FU1 → FU2), or a whole batch with <b>Send tick</b>.
           <b>AUTO send</b> = the scheduler sends automatically every 15 min in the window.
           Either way, <b>nothing is sent while <code>DRY_RUN=true</code></b> (the master safety in Railway) — that is the go-live gate.
         </p>
@@ -241,6 +247,14 @@ function makeApp() {
   });
   app.post('/action/:id/block', async (req, res) => {
     await db.updateLead(Number(req.params.id), { grp: config.groups.blockList });
+    res.redirect('/');
+  });
+  // Manual per-lead send: sends the next email in the sequence to one lead.
+  app.post('/action/:id/send', async (req, res) => {
+    try {
+      const r = await sendOne(Number(req.params.id));
+      if (r && r.error) console.log('[send-one]', req.params.id, r.error);
+    } catch (e) { console.error('[send-one]', e.message); }
     res.redirect('/');
   });
   // Legacy alias so a stale/cached page (old 📞/🚫 buttons) still works.

@@ -170,7 +170,52 @@ async function runSender(opts) {
   if (budget > 0) await processNew(leads, budget, seen);
 }
 
-module.exports = { runSender, dailyQuota };
+/**
+ * Manual, per-lead send: sends the NEXT email in the sequence to one lead,
+ * chosen by the human. Bypasses the daily window/quota (deliberate action) but
+ * still respects DRY_RUN (master safety), the guard firewall, and block status.
+ * Returns { step } on success or { error } if it couldn't send.
+ */
+async function sendOne(leadId) {
+  const S = config.statuses;
+  const leads = await db.allLeads();
+  const lead = leads.find((l) => String(l.id) === String(leadId));
+  if (!lead) return { error: 'not found' };
+  if (!lead.email) return { error: 'no email' };
+  if (blocked(lead)) return { error: 'blocked' };
+  if (lead.response) return { error: 'has a response already (sequence stopped)' };
+
+  const reason = screenReason({ name: lead.name, email: lead.email, notes: lead.notes, topApp: lead.top_app });
+  if (reason) return { error: 'guard: ' + reason };
+
+  let step;
+  if (!lead.outreach) step = 'initial';
+  else if (lead.outreach === S.emailSent) step = 'fu1';
+  else if (lead.outreach === S.fu1Sent) step = 'fu2';
+  else return { error: 'sequence already complete for this lead' };
+
+  if (isDry()) { log(`[DRY] manual send ${step} -> ${lead.email} (${lead.name})`); return { dry: true, step }; }
+
+  if (step === 'initial') {
+    const tmpl = templates.initial(lead);
+    const messageId = await email.send({ to: lead.email, subject: tmpl.subject, html: tmpl.html });
+    await db.updateLead(lead.id, {
+      outreach: S.emailSent, initial_date: t.todayStamp(), grp: t.dayMonthLabel(), message_id: messageId || ''
+    });
+    await db.logEvent(lead.id, 'initial');
+  } else {
+    const tmpl = step === 'fu2' ? templates.fu2(lead) : templates.fu1(lead);
+    await email.send({ to: lead.email, subject: `Quick question about ${lead.name}`, html: tmpl.html, inReplyTo: lead.message_id });
+    await db.updateLead(lead.id, step === 'fu2'
+      ? { outreach: S.fu2Sent, fu2_date: t.todayStamp() }
+      : { outreach: S.fu1Sent, fu1_date: t.todayStamp() });
+    await db.logEvent(lead.id, step);
+  }
+  log(`manual send ${step} -> ${lead.email} (${lead.name})`);
+  return { step };
+}
+
+module.exports = { runSender, sendOne, dailyQuota };
 
 if (require.main === module) {
   (async () => {
