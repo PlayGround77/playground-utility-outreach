@@ -140,10 +140,15 @@ async function processNew(leads, budget, seen) {
 
 async function runSender(opts) {
   opts = opts || {};
-  // In manual mode the scheduler stays idle; the human sends via "Send tick".
   const mode = await db.getSetting('send_mode', 'manual');
+  // Scheduler only auto-sends in 'auto'. Paused/Manual keep it idle.
   if (opts.scheduled && mode !== 'auto') {
-    log('Manual mode — scheduler idle. Use “Send tick” on the dashboard to send.');
+    log(`Scheduler idle (mode=${mode}).`);
+    return;
+  }
+  // A manual batch ("Send tick") is refused while paused.
+  if (!opts.scheduled && mode === 'paused') {
+    log('Sending is PAUSED — resume to send.');
     return;
   }
   if (!withinWindow()) { log('Outside sending window — skip.'); return; }

@@ -83,7 +83,10 @@ function shell(inner) {
   .dry{background:#e0f2fe;color:#075985;border-color:#7dd3fc}
   .auto{background:#dcfce7;color:#166534;border-color:#86efac}
   .manual{background:#fef3c7;color:#92400e;border-color:#fcd34d}
-  @media (prefers-color-scheme:dark){.live{background:#3b1414;color:#fca5a5}.dry{background:#0c2a3a;color:#7dd3fc}.auto{background:#0f2a17;color:#86efac}.manual{background:#2a2109;color:#fcd34d}}
+  .paused{background:#e5e7eb;color:#374151;border-color:#9ca3af}
+  @media (prefers-color-scheme:dark){.live{background:#3b1414;color:#fca5a5}.dry{background:#0c2a3a;color:#7dd3fc}.auto{background:#0f2a17;color:#86efac}.manual{background:#2a2109;color:#fcd34d}.paused{background:#242832;color:#cbd5e1}}
+  .seg{display:inline-flex;gap:.25rem}
+  .seg button{padding:.4rem .55rem}
   .toolbar{margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap}
   button{font:inherit;padding:.4rem .7rem;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;transition:.15s}
   button:hover{background:var(--hover)}
@@ -151,6 +154,7 @@ function makeApp() {
       const msg = req.query.msg ? esc(String(req.query.msg).slice(0, 300)) : '';
       const wOpen = windowOpen();
       const quota = dailyQuota();
+      const dupCount = await db.countDuplicates();
 
       const appCell = (l) => l.store_link
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
@@ -179,13 +183,18 @@ function makeApp() {
       const mode = config.DRY_RUN
         ? '<span class="pill dry">DRY RUN · nothing is sent</span>'
         : '<span class="pill live">LIVE · sending real email</span>';
-      const sendPill = sendMode === 'auto'
-        ? '<span class="pill auto">AUTO send</span>'
-        : '<span class="pill manual">MANUAL send</span>';
-      const toggle = `<form method="post" action="/mode">
-        <input type="hidden" name="value" value="${sendMode === 'auto' ? 'manual' : 'auto'}">
-        <button title="Automatic = the scheduler sends on its own. Manual = only sends when you click ‘Send tick’.">
-          ${sendMode === 'auto' ? '⏸ Set Manual' : '▶ Set Auto'}</button></form>`;
+      const PILLS = {
+        paused: '<span class="pill paused">PAUSED</span>',
+        manual: '<span class="pill manual">MANUAL send</span>',
+        auto: '<span class="pill auto">AUTO send</span>'
+      };
+      const sendPill = PILLS[sendMode] || PILLS.manual;
+      const modeBtn = (v, label, title) =>
+        `<form method="post" action="/mode"><input type="hidden" name="value" value="${v}"><button class="${sendMode === v ? 'primary' : ''}" title="${title}">${label}</button></form>`;
+      const modeCtl =
+        modeBtn('paused', '⏸ Pause', 'Stop ALL automatic sending (scheduler + batch)') +
+        modeBtn('manual', '✋ Manual', 'No auto-send; you send per lead (✉) or with Send tick') +
+        modeBtn('auto', '▶ Auto', 'Scheduler sends automatically every 15 min in the window');
 
       const tile = (n, l) => `<div class="tile"><div class="n">${n}</div><div class="l">${l}</div></div>`;
 
@@ -197,8 +206,9 @@ function makeApp() {
             <form method="post" action="/run/refill"><button class="primary">Source now</button></form>
             <form method="post" action="/run/send"><button>Send tick</button></form>
             <form method="post" action="/run/watch"><button>Check replies</button></form>
-            ${toggle}
+            <span class="seg">${modeCtl}</span>
             <form method="post" action="/test-email"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
+            <form method="post" action="/admin/dedupe" onsubmit="return confirm('Find and remove duplicate leads (same email)? Keeps one per email.')"><button title="Find & remove duplicate leads by email">🔁 Dedupe</button></form>
             <form method="post" action="/admin/clear" onsubmit="return confirm('Delete ALL leads and events? This cannot be undone.')"><button title="Delete all leads to start fresh">🗑 Clear</button></form>
           </div>
         </header>
@@ -208,6 +218,7 @@ function makeApp() {
         <div class="status">
           <span>Window: <b>${wOpen ? 'OPEN' : 'closed'}</b> (${config.sender.windowStartHour}:00–${config.sender.windowEndHour}:00, Mon–Fri)</span>
           <span>Sent today: <b>${sentToday} / ${quota}</b></span>
+          <span>Duplicates: <b>${dupCount}</b>${dupCount ? ' (click 🔁 Dedupe)' : ''}</span>
           <span id="nexttick" data-mode="${sendMode}" data-dry="${config.DRY_RUN ? '1' : '0'}">…</span>
         </div>
 
@@ -325,22 +336,30 @@ function makeApp() {
     res.redirect('/');
   });
   app.post('/mode', async (req, res) => {
-    await db.setSetting('send_mode', req.body.value === 'auto' ? 'auto' : 'manual');
-    res.redirect('/');
+    const v = ['paused', 'manual', 'auto'].includes(req.body.value) ? req.body.value : 'manual';
+    await db.setSetting('send_mode', v);
+    const label = { paused: '⏸ Sending PAUSED — no automatic messages go out.', manual: '✋ Manual mode — you send per lead or with Send tick.', auto: '▶ Auto mode — the scheduler will send automatically.' };
+    return back(res, label[v]);
   });
   app.post('/admin/clear', async (req, res) => {
-    try { await db.clearLeads(); } catch (e) { console.error('[clear]', e.message); }
-    res.redirect('/');
+    try { await db.clearLeads(); return back(res, 'All leads cleared.'); }
+    catch (e) { return back(res, '⚠️ Clear failed: ' + e.message); }
+  });
+  app.post('/admin/dedupe', async (req, res) => {
+    try { const n = await db.removeDuplicates(); return back(res, `🔁 Removed ${n} duplicate lead${n === 1 ? '' : 's'} (kept one per email).`); }
+    catch (e) { return back(res, '⚠️ Dedupe failed: ' + e.message); }
   });
 
   app.post('/run/refill', (req, res) => {
     runPoolRefill(true).catch((e) => console.error(e));
     back(res, 'Sourcing started — new leads will appear in a moment (refresh the page).');
   });
-  // Manual send = human-triggered (not scheduled), so it always attempts a send batch.
-  app.post('/run/send', (req, res) => {
+  // Manual send = human-triggered (not scheduled). Refused while paused.
+  app.post('/run/send', async (req, res) => {
+    const mode = await db.getSetting('send_mode', 'manual');
+    if (mode === 'paused') return back(res, '⏸ Sending is paused. Switch to Manual or Auto first.');
     runSender({ scheduled: false }).catch((e) => console.error(e));
-    back(res, config.DRY_RUN
+    return back(res, config.DRY_RUN
       ? 'Send tick ran in DRY RUN — nothing sent (see logs). Set DRY_RUN=false to send for real.'
       : 'Send tick triggered — sending a batch now; refresh to see the counters move.');
   });

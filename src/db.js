@@ -75,17 +75,47 @@ async function allLeads() {
   return r.rows;
 }
 
+// Insert a lead, but SKIP if a lead with the same email already exists
+// (DB-level duplicate prevention, independent of the in-memory dedup index).
+// Returns the new id, or null if it was a duplicate.
 async function insertLead(lead) {
   const r = await q(
     `INSERT INTO leads
        (name,email,priority,top_app,store_link,grp,developer_id,
         category,installs_day,installs_month,revenue_month,apps_count)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+     WHERE $2 = '' OR NOT EXISTS (SELECT 1 FROM leads WHERE email <> '' AND lower(email) = lower($2))
+     RETURNING id`,
     [lead.name, lead.email, lead.priority || 0, lead.topApp || '', lead.storeLink || '',
       lead.grp || '', lead.developerId || '', lead.category || '',
       lead.installsDay || 0, lead.installsMonth || 0, lead.revenueMonth || 0, lead.appsCount || 0]
   );
-  return r.rows[0].id;
+  return r.rows.length ? r.rows[0].id : null;
+}
+
+// Count duplicate leads (extra rows sharing an email).
+async function countDuplicates() {
+  const r = await q(
+    `SELECT COALESCE(SUM(cnt - 1), 0)::int AS n FROM
+       (SELECT count(*) cnt FROM leads WHERE email <> '' GROUP BY lower(email) HAVING count(*) > 1) x`
+  );
+  return r.rows[0].n;
+}
+
+// Remove duplicate leads by email, keeping the most-advanced row per email
+// (prefers one already contacted / with a thread, else the earliest). Returns removed count.
+async function removeDuplicates() {
+  const r = await q(
+    `WITH ranked AS (
+       SELECT id, row_number() OVER (
+         PARTITION BY lower(email)
+         ORDER BY (outreach <> '') DESC, (message_id <> '') DESC, id ASC
+       ) rn
+       FROM leads WHERE email <> ''
+     )
+     DELETE FROM leads WHERE id IN (SELECT id FROM ranked WHERE rn > 1)`
+  );
+  return r.rowCount || 0;
 }
 
 async function updateLead(id, fields) {
@@ -156,5 +186,6 @@ async function setSetting(key, value) {
 
 module.exports = {
   pool, q, init, allLeads, insertLead, updateLead, dedupIndex, clearLeads,
+  countDuplicates, removeDuplicates,
   countSendable, logEvent, countToday, getSetting, setSetting, config
 };

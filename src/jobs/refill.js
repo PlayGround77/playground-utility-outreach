@@ -75,13 +75,14 @@ async function runPoolRefill(force) {
           if (reason) { bump(reason); continue; }
 
           // Sourcing always writes to our own DB (safe + needed for review).
-          // Only EMAIL sending is gated by DRY_RUN.
-          await db.insertLead({
+          // Only EMAIL sending is gated by DRY_RUN. insertLead skips duplicates.
+          const newId = await db.insertLead({
             name: cand.devName, email: cand.email, priority: cand.priority,
             topApp: cand.topApp, storeLink: cand.storeLink, grp, developerId: cand.devId,
             category: cand.topAppCategory, installsDay: cand.installsPerDay,
             installsMonth: cand.installsPerMonth, revenueMonth: cand.revenuePerMonth, appsCount: cand.appsCount
           });
+          if (!newId) { bump('duplicate_email'); continue; }
           log(`add "${cand.devName}" <${cand.email}> prio=${cand.priority} top="${cand.topApp}"`);
           index.add(dedupKey(cand.devName, cand.email));
           index.add('email:' + cand.email.toLowerCase());
