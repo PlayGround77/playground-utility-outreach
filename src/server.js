@@ -54,8 +54,11 @@ function optionList(opts, current) {
 function selectCell(id, name, opts, current) {
   const c = STATUS_COLOR[current] || '';
   const style = c ? ` style="border-left:4px solid ${c}"` : '';
+  const title = name === 'outreach'
+    ? 'Outreach status — where this lead is in the sequence. Set automatically as emails go out; change here to override.'
+    : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call” / “Not Relevant” yourself.';
   return `<form method="post" action="/action/${id}/set" class="sel">
-    <select name="${name}" onchange="this.form.submit()"${style}>${optionList(opts, current)}</select>
+    <select name="${name}" title="${esc(title)}" onchange="this.form.submit()"${style}>${optionList(opts, current)}</select>
   </form>`;
 }
 
@@ -203,9 +206,9 @@ function makeApp() {
           <h1>${esc(config.brand.companyName)} Utility Outreach</h1>
           ${mode} ${sendPill}
           <div class="toolbar">
-            <form method="post" action="/run/refill"><button class="primary">Source now</button></form>
-            <form method="post" action="/run/send"><button>Send tick</button></form>
-            <form method="post" action="/run/watch"><button>Check replies</button></form>
+            <form method="post" action="/run/refill"><button class="primary" title="Fetch new utility-app studios from AppStoreSpy using the search criteria below, screen them, and add them as leads">Source now</button></form>
+            <form method="post" action="/run/send"><button title="Send one paced batch now to leads in the queue — respects the daily quota, the send window, and DRY_RUN">Send tick</button></form>
+            <form method="post" action="/run/watch"><button title="Scan the inbox now for replies and bounces and update lead statuses">Check replies</button></form>
             <span class="seg">${modeCtl}</span>
             <form method="post" action="/test-email"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
             <form method="post" action="/admin/dedupe" onsubmit="return confirm('Find and remove duplicate leads (same email)? Keeps one per email.')"><button title="Find & remove duplicate leads by email">🔁 Dedupe</button></form>
@@ -246,7 +249,7 @@ function makeApp() {
               <label>Pages per category<input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
               <label>Source target (studios)<input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
             </div>
-            <button class="primary">Save criteria</button>
+            <button class="primary" title="Save these search criteria to the database; they take effect on the next “Source now” and scheduled refill">Save criteria</button>
             <span class="muted" style="font-size:.78rem">Valid: ${criteria.VALID_CATEGORIES.join(', ')}</span>
           </form>
         </details>
