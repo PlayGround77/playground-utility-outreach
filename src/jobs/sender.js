@@ -138,7 +138,14 @@ async function processNew(leads, budget, seen) {
   return sent;
 }
 
-async function runSender() {
+async function runSender(opts) {
+  opts = opts || {};
+  // In manual mode the scheduler stays idle; the human sends via "Send tick".
+  const mode = await db.getSetting('send_mode', 'manual');
+  if (opts.scheduled && mode !== 'auto') {
+    log('Manual mode — scheduler idle. Use “Send tick” on the dashboard to send.');
+    return;
+  }
   if (!withinWindow()) { log('Outside sending window — skip.'); return; }
 
   const quota = dailyQuota();

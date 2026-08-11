@@ -20,8 +20,8 @@ function guard(name, fn) {
 function start() {
   const opts = { timezone: TZ };
 
-  // Sender — every 15 minutes (the job itself enforces the send window).
-  cron.schedule('*/15 * * * *', guard('sender', runSender), opts);
+  // Sender — every 15 minutes (only auto-sends when send mode is "auto").
+  cron.schedule('*/15 * * * *', guard('sender', () => runSender({ scheduled: true })), opts);
 
   // Reply / bounce watcher — every 30 minutes.
   cron.schedule('*/30 * * * *', guard('watcher', runReplyWatcher), opts);

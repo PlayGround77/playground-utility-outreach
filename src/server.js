@@ -73,7 +73,9 @@ function shell(inner) {
   .pill{padding:.2rem .6rem;border-radius:999px;font-size:.78rem;font-weight:600;border:1px solid}
   .live{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
   .dry{background:#e0f2fe;color:#075985;border-color:#7dd3fc}
-  @media (prefers-color-scheme:dark){.live{background:#3b1414;color:#fca5a5}.dry{background:#0c2a3a;color:#7dd3fc}}
+  .auto{background:#dcfce7;color:#166534;border-color:#86efac}
+  .manual{background:#fef3c7;color:#92400e;border-color:#fcd34d}
+  @media (prefers-color-scheme:dark){.live{background:#3b1414;color:#fca5a5}.dry{background:#0c2a3a;color:#7dd3fc}.auto{background:#0f2a17;color:#86efac}.manual{background:#2a2109;color:#fcd34d}}
   .toolbar{margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap}
   button{font:inherit;padding:.4rem .7rem;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;transition:.15s}
   button:hover{background:var(--hover)}
@@ -126,6 +128,7 @@ function makeApp() {
       }
       const sentToday = await db.countToday(['initial', 'fu1', 'fu2']);
       const crit = await criteria.get();
+      const sendMode = await db.getSetting('send_mode', 'manual');
 
       const appCell = (l) => l.store_link
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
@@ -151,17 +154,26 @@ function makeApp() {
       const mode = config.DRY_RUN
         ? '<span class="pill dry">DRY RUN · nothing is sent</span>'
         : '<span class="pill live">LIVE · sending real email</span>';
+      const sendPill = sendMode === 'auto'
+        ? '<span class="pill auto">AUTO send</span>'
+        : '<span class="pill manual">MANUAL send</span>';
+      const toggle = `<form method="post" action="/mode">
+        <input type="hidden" name="value" value="${sendMode === 'auto' ? 'manual' : 'auto'}">
+        <button title="Automatic = the scheduler sends on its own. Manual = only sends when you click ‘Send tick’.">
+          ${sendMode === 'auto' ? '⏸ Set Manual' : '▶ Set Auto'}</button></form>`;
 
       const tile = (n, l) => `<div class="tile"><div class="n">${n}</div><div class="l">${l}</div></div>`;
 
       res.send(shell(`
         <header>
           <h1>${esc(config.brand.companyName)} Utility Outreach</h1>
-          ${mode}
+          ${mode} ${sendPill}
           <div class="toolbar">
             <form method="post" action="/run/refill"><button class="primary">Source now</button></form>
             <form method="post" action="/run/send"><button>Send tick</button></form>
             <form method="post" action="/run/watch"><button>Check replies</button></form>
+            ${toggle}
+            <form method="post" action="/admin/clear" onsubmit="return confirm('Delete ALL leads and events? This cannot be undone.')"><button title="Delete all leads to start fresh">🗑 Clear</button></form>
           </div>
         </header>
 
@@ -207,7 +219,11 @@ function makeApp() {
           Change <b>Outreach</b> / <b>Response</b> status directly from the dropdowns (saved instantly).
           <b>⛔ Block</b> removes a studio from sending &amp; future sourcing.
           Replies are detected automatically and set Response to “Respond”.
-          Sending mode is controlled by the <code>DRY_RUN</code> env var in Railway.
+        </p>
+        <p class="legend">
+          <b>MANUAL send</b> = the scheduler never sends on its own; you send by clicking <b>Send tick</b> (your approval).
+          <b>AUTO send</b> = the scheduler sends automatically every 15 min in the window.
+          Either way, <b>nothing is sent while <code>DRY_RUN=true</code></b> (the master safety in Railway) — that is the go-live gate.
         </p>
         <p class="legend">Showing up to 500 of ${leads.length} leads.</p>
       `));
@@ -236,9 +252,18 @@ function makeApp() {
     try { await criteria.set(req.body || {}); } catch (e) { console.error('[criteria]', e.message); }
     res.redirect('/');
   });
+  app.post('/mode', async (req, res) => {
+    await db.setSetting('send_mode', req.body.value === 'auto' ? 'auto' : 'manual');
+    res.redirect('/');
+  });
+  app.post('/admin/clear', async (req, res) => {
+    try { await db.clearLeads(); } catch (e) { console.error('[clear]', e.message); }
+    res.redirect('/');
+  });
 
   app.post('/run/refill', (req, res) => { runPoolRefill(true).catch((e) => console.error(e)); res.redirect('/'); });
-  app.post('/run/send', (req, res) => { runSender().catch((e) => console.error(e)); res.redirect('/'); });
+  // Manual send = human-triggered (not scheduled), so it always attempts a send.
+  app.post('/run/send', (req, res) => { runSender({ scheduled: false }).catch((e) => console.error(e)); res.redirect('/'); });
   app.post('/run/watch', (req, res) => { runReplyWatcher().catch((e) => console.error(e)); res.redirect('/'); });
 
   return app;
