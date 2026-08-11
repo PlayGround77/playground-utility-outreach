@@ -149,6 +149,11 @@ async function clearLeads() {
   await q('DELETE FROM events');
 }
 
+async function deleteLead(id) {
+  await q('DELETE FROM events WHERE lead_id = $1', [id]);
+  await q('DELETE FROM leads WHERE id = $1', [id]);
+}
+
 async function countSendable() {
   const r = await q(
     `SELECT COUNT(*)::int AS n FROM leads
@@ -187,7 +192,7 @@ async function setSetting(key, value) {
 }
 
 module.exports = {
-  pool, q, init, allLeads, insertLead, updateLead, dedupIndex, clearLeads,
+  pool, q, init, allLeads, insertLead, updateLead, dedupIndex, clearLeads, deleteLead,
   countDuplicates, removeDuplicates,
   countSendable, logEvent, countToday, getSetting, setSetting, config
 };

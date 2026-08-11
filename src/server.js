@@ -187,6 +187,7 @@ function makeApp() {
           <form method="get" action="/preview/${l.id}"><button title="See the exact email that will be sent to this lead">👁 Preview</button></form>
           <form method="post" action="/action/${l.id}/send" onsubmit="return confirm('Send the next email in the sequence to this lead now?')"><button class="send" title="Send the next email (initial → FU1 → FU2) to THIS lead now. Respects DRY_RUN.">✉ Send</button></form>
           <form method="post" action="/action/${l.id}/block"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form>
+          <form method="post" action="/action/${l.id}/delete" onsubmit="return confirm('Delete this lead permanently? (Block is better for junk — it also prevents re-sourcing.)')"><button title="Delete this lead permanently from the database">🗑</button></form>
         </td>
       </tr>`).join('');
 
@@ -324,6 +325,10 @@ function makeApp() {
   app.post('/action/:id/block', async (req, res) => {
     await db.updateLead(Number(req.params.id), { grp: config.groups.blockList });
     res.redirect('/');
+  });
+  app.post('/action/:id/delete', async (req, res) => {
+    try { await db.deleteLead(Number(req.params.id)); return back(res, 'Lead deleted.'); }
+    catch (e) { return back(res, '⚠️ Delete failed: ' + e.message); }
   });
   const back = (res, m) => res.redirect('/?msg=' + encodeURIComponent(m));
 
