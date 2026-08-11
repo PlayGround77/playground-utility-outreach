@@ -5,10 +5,18 @@ const crypto = require('crypto');
 const config = require('./config');
 const db = require('./db');
 const criteria = require('./criteria');
+const email = require('./email');
+const t = require('./time');
 
-const { runSender, sendOne } = require('./jobs/sender');
+const { runSender, sendOne, dailyQuota } = require('./jobs/sender');
 const { runReplyWatcher } = require('./jobs/replywatcher');
 const { runPoolRefill } = require('./jobs/refill');
+
+function windowOpen() {
+  if (config.sender.skipWeekdays.includes(t.weekday())) return false;
+  const h = t.hour();
+  return h >= config.sender.windowStartHour && h < config.sender.windowEndHour;
+}
 
 function num(n) { return Number(n || 0).toLocaleString('en-US'); }
 function esc(s) {
@@ -111,6 +119,9 @@ function shell(inner) {
   a:hover{text-decoration:underline}
   .muted{color:var(--muted)}
   .legend{color:var(--muted);font-size:.82rem;margin:.8rem 0 0}
+  .banner{background:var(--chip);border:1px solid var(--accent);border-radius:10px;padding:.6rem .9rem;margin:.2rem 0 1rem;font-weight:500}
+  .status{display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:.5rem .9rem;margin-bottom:1rem;font-size:.86rem}
+  #nexttick{font-variant-numeric:tabular-nums;color:var(--muted)}
 </style></head><body><div class="container">${inner}</div></body></html>`;
 }
 
@@ -137,6 +148,9 @@ function makeApp() {
       const sentToday = await db.countToday(['initial', 'fu1', 'fu2']);
       const crit = await criteria.get();
       const sendMode = await db.getSetting('send_mode', 'manual');
+      const msg = req.query.msg ? esc(String(req.query.msg).slice(0, 300)) : '';
+      const wOpen = windowOpen();
+      const quota = dailyQuota();
 
       const appCell = (l) => l.store_link
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
@@ -184,9 +198,18 @@ function makeApp() {
             <form method="post" action="/run/send"><button>Send tick</button></form>
             <form method="post" action="/run/watch"><button>Check replies</button></form>
             ${toggle}
+            <form method="post" action="/test-email"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
             <form method="post" action="/admin/clear" onsubmit="return confirm('Delete ALL leads and events? This cannot be undone.')"><button title="Delete all leads to start fresh">🗑 Clear</button></form>
           </div>
         </header>
+
+        ${msg ? `<div class="banner">${msg}</div>` : ''}
+
+        <div class="status">
+          <span>Window: <b>${wOpen ? 'OPEN' : 'closed'}</b> (${config.sender.windowStartHour}:00–${config.sender.windowEndHour}:00, Mon–Fri)</span>
+          <span>Sent today: <b>${sentToday} / ${quota}</b></span>
+          <span id="nexttick" data-mode="${sendMode}" data-dry="${config.DRY_RUN ? '1' : '0'}">…</span>
+        </div>
 
         <div class="tiles">
           ${tile(sentToday, 'Sent today')}
@@ -239,6 +262,21 @@ function makeApp() {
           Either way, <b>nothing is sent while <code>DRY_RUN=true</code></b> (the master safety in Railway) — that is the go-live gate.
         </p>
         <p class="legend">Showing up to 500 of ${leads.length} leads.</p>
+        <script>
+        (function(){
+          var el=document.getElementById('nexttick'); if(!el) return;
+          var mode=el.getAttribute('data-mode'), dry=el.getAttribute('data-dry')==='1';
+          function pad(n){return (n<10?'0':'')+n;}
+          function tick(){
+            var d=new Date(), into=(d.getMinutes()%15)*60+d.getSeconds(), left=900-into; if(left<=0)left=900;
+            var m=Math.floor(left/60), s=left%60, cd=pad(m)+':'+pad(s);
+            var txt = mode==='auto' ? ('⏱ Next auto send in '+cd) : ('⏱ Manual mode — auto tick would run in '+cd+' (idle)');
+            if(dry) txt += ' · DRY: nothing is sent';
+            el.textContent=txt;
+          }
+          tick(); setInterval(tick,1000);
+        })();
+        </script>
       `));
     } catch (e) {
       res.status(500).send('Error: ' + esc(e.message));
@@ -256,13 +294,26 @@ function makeApp() {
     await db.updateLead(Number(req.params.id), { grp: config.groups.blockList });
     res.redirect('/');
   });
+  const back = (res, m) => res.redirect('/?msg=' + encodeURIComponent(m));
+
   // Manual per-lead send: sends the next email in the sequence to one lead.
   app.post('/action/:id/send', async (req, res) => {
     try {
       const r = await sendOne(Number(req.params.id));
-      if (r && r.error) console.log('[send-one]', req.params.id, r.error);
-    } catch (e) { console.error('[send-one]', e.message); }
-    res.redirect('/');
+      if (r.error) return back(res, '⚠️ Not sent — ' + r.error);
+      if (r.dry) return back(res, 'DRY RUN — would send the ' + r.step + ' email now. Set DRY_RUN=false in Railway to actually send.');
+      return back(res, '✉ Sent the ' + r.step + ' email (immediately, no queue).');
+    } catch (e) { return back(res, '⚠️ Send failed: ' + e.message); }
+  });
+
+  // Test email to the owner's own inbox — bypasses DRY (safe: only emails you).
+  app.post('/test-email', async (req, res) => {
+    const to = config.report.summaryTo || config.gmail.user;
+    try {
+      await email.notify(to, `${config.brand.companyName} Outreach — test email`,
+        'This is a test from your outreach dashboard. If you received this, Gmail sending works. ✅');
+      return back(res, '✉ Test email sent to ' + to + ' — check your inbox (and Spam).');
+    } catch (e) { return back(res, '⚠️ Test email failed: ' + e.message); }
   });
   // Legacy alias so a stale/cached page (old 📞/🚫 buttons) still works.
   app.post('/action/:id/respond', async (req, res) => {
@@ -282,10 +333,21 @@ function makeApp() {
     res.redirect('/');
   });
 
-  app.post('/run/refill', (req, res) => { runPoolRefill(true).catch((e) => console.error(e)); res.redirect('/'); });
-  // Manual send = human-triggered (not scheduled), so it always attempts a send.
-  app.post('/run/send', (req, res) => { runSender({ scheduled: false }).catch((e) => console.error(e)); res.redirect('/'); });
-  app.post('/run/watch', (req, res) => { runReplyWatcher().catch((e) => console.error(e)); res.redirect('/'); });
+  app.post('/run/refill', (req, res) => {
+    runPoolRefill(true).catch((e) => console.error(e));
+    back(res, 'Sourcing started — new leads will appear in a moment (refresh the page).');
+  });
+  // Manual send = human-triggered (not scheduled), so it always attempts a send batch.
+  app.post('/run/send', (req, res) => {
+    runSender({ scheduled: false }).catch((e) => console.error(e));
+    back(res, config.DRY_RUN
+      ? 'Send tick ran in DRY RUN — nothing sent (see logs). Set DRY_RUN=false to send for real.'
+      : 'Send tick triggered — sending a batch now; refresh to see the counters move.');
+  });
+  app.post('/run/watch', (req, res) => {
+    runReplyWatcher().catch((e) => console.error(e));
+    back(res, 'Reply/bounce check started.');
+  });
 
   return app;
 }
