@@ -29,6 +29,7 @@ function defaults() {
     installsMin: config.appStoreSpy.installsBand.minPerMonth,
     installsMax: config.appStoreSpy.installsBand.maxPerMonth,
     minApps: config.appStoreSpy.minAppsCount,
+    minRating: Number(process.env.MIN_RATING) || 0, // 0 = any; e.g. 4 = only apps rated ≥ 4.0
     revenueMax: config.appStoreSpy.revenueMaxPerMonth,
     maxPriority: Number(process.env.MAX_PRIORITY) || 100000000, // flag giants above this (priority = ipd × apps)
     pagesPerCategory: config.appStoreSpy.pagesPerCategory,
@@ -53,7 +54,7 @@ function sanitize(input, base) {
       .filter((c) => VALID_CATEGORIES.includes(c));
     if (list.length) out.categories = Array.from(new Set(list));
   }
-  for (const f of ['installsMin', 'installsMax', 'minApps', 'revenueMax', 'maxPriority', 'pagesPerCategory', 'refillTarget']) {
+  for (const f of ['installsMin', 'installsMax', 'minApps', 'minRating', 'revenueMax', 'maxPriority', 'pagesPerCategory', 'refillTarget']) {
     if (input[f] !== undefined && input[f] !== '') {
       const n = Number(input[f]);
       if (Number.isFinite(n)) out[f] = n;
@@ -62,6 +63,7 @@ function sanitize(input, base) {
   out.installsMin = Math.max(0, Math.round(out.installsMin));
   out.installsMax = Math.max(out.installsMin + 1, Math.round(out.installsMax));
   out.minApps = Math.max(1, Math.round(out.minApps));
+  out.minRating = Math.min(5, Math.max(0, Number(out.minRating) || 0));
   out.revenueMax = Math.max(0, Math.round(out.revenueMax));
   out.maxPriority = Math.max(0, Math.round(out.maxPriority));
   out.pagesPerCategory = Math.min(20, Math.max(1, Math.round(out.pagesPerCategory)));

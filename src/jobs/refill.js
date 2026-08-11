@@ -17,7 +17,8 @@ function screenCandidate(cand, index, crit) {
   if (/\bpublish(er|ing)?\b/i.test(cand.devName)) return 'publisher';
   if (!cand.email) return 'no_email';
   if (index.has(dedupKey(cand.devName, cand.email))) return 'already_on_board';
-  if (cand.installsPerMonth < crit.installsMin || cand.installsPerMonth > crit.installsMax) return 'installs_out_of_range';
+  // Installs band is enforced at query time (per-app downloads_daily); the stored
+  // installs are developer-level totals, so we do NOT re-check the band here.
   if (cand.appsCount < crit.minApps) return 'too_few_apps';
   if (cand.revenuePerMonth > crit.revenueMax) return 'revenue_too_high';
   if (index.has('email:' + cand.email.toLowerCase())) return 'shared_email_farm';
@@ -52,7 +53,7 @@ async function runPoolRefill(force) {
         if (!(await ass.underCallCap())) { log('daily API cap reached'); capHit = true; break; }
 
         let rows;
-        try { rows = await ass.queryApps(category, page, 100, band); }
+        try { rows = await ass.queryApps(category, page, 100, band, crit.minRating); }
         catch (e) { log(`query ${category} p${page} failed: ${e.message}`); break; }
         if (!rows.length) break;
 
@@ -81,7 +82,8 @@ async function runPoolRefill(force) {
             name: cand.devName, email: cand.email, priority: cand.priority,
             topApp: cand.topApp, storeLink: cand.storeLink, grp, developerId: cand.devId,
             category: cand.topAppCategory, installsDay: cand.installsPerDay,
-            installsMonth: cand.installsPerMonth, revenueMonth: cand.revenuePerMonth, appsCount: cand.appsCount
+            installsMonth: cand.installsPerMonth, revenueMonth: cand.revenuePerMonth, appsCount: cand.appsCount,
+            ratingAvg: cand.ratingAvg, ratingCount: cand.ratingCount
           });
           // Email already exists from a previous run → add this app to it.
           if (!newId) { await db.appendApp('email', cand.email, cand.topApp); bump('merged_into_existing'); continue; }

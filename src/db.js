@@ -37,6 +37,8 @@ async function init() {
       installs_month BIGINT NOT NULL DEFAULT 0,
       revenue_month BIGINT NOT NULL DEFAULT 0,
       apps_count    INTEGER NOT NULL DEFAULT 0,
+      rating_avg    NUMERIC NOT NULL DEFAULT 0,
+      rating_count  BIGINT NOT NULL DEFAULT 0,
       grp           TEXT NOT NULL DEFAULT '',
       developer_id  TEXT NOT NULL DEFAULT '',
       message_id    TEXT NOT NULL DEFAULT '',
@@ -53,7 +55,9 @@ async function init() {
     'revenue_month BIGINT NOT NULL DEFAULT 0',
     'apps_count INTEGER NOT NULL DEFAULT 0',
     "thread_id TEXT NOT NULL DEFAULT ''",
-    "apps_json TEXT NOT NULL DEFAULT ''"
+    "apps_json TEXT NOT NULL DEFAULT ''",
+    'rating_avg NUMERIC NOT NULL DEFAULT 0',
+    'rating_count BIGINT NOT NULL DEFAULT 0'
   ]) {
     await q(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ${col};`);
   }
@@ -87,13 +91,14 @@ async function insertLead(lead) {
   const r = await q(
     `INSERT INTO leads
        (name,email,priority,top_app,apps_json,store_link,grp,developer_id,
-        category,installs_day,installs_month,revenue_month,apps_count)
-     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+        category,installs_day,installs_month,revenue_month,apps_count,rating_avg,rating_count)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
      WHERE $2 = '' OR NOT EXISTS (SELECT 1 FROM leads WHERE email <> '' AND lower(email) = lower($2))
      RETURNING id`,
     [lead.name, lead.email, lead.priority || 0, lead.topApp || '', appsJson, lead.storeLink || '',
       lead.grp || '', lead.developerId || '', lead.category || '',
-      lead.installsDay || 0, lead.installsMonth || 0, lead.revenueMonth || 0, lead.appsCount || 0]
+      lead.installsDay || 0, lead.installsMonth || 0, lead.revenueMonth || 0, lead.appsCount || 0,
+      lead.ratingAvg || 0, lead.ratingCount || 0]
   );
   return r.rows.length ? r.rows[0].id : null;
 }

@@ -44,11 +44,18 @@ async function fetchWithBackoff(url, options) {
  * downloads_month is unreliable, so the band is applied to downloads_daily
  * (monthly band / 30). Returns an array of app rows.
  */
-async function queryApps(category, page, limit, band) {
+async function queryApps(category, page, limit, band, minRating) {
   await countCall();
   const b = band || A.installsBand;
   const dailyMin = Math.max(1, Math.round(b.minPerMonth / 30));
   const dailyMax = Math.round(b.maxPerMonth / 30);
+  const filter = {
+    published: true,
+    category_type: 'APP',
+    category,
+    downloads_daily: { gte: dailyMin, lte: dailyMax }
+  };
+  if (minRating && minRating > 0) filter.rating_avg = { gte: minRating, lte: 5 };
   const body = {
     limit: limit || 100,
     page: page || 1,
@@ -56,13 +63,8 @@ async function queryApps(category, page, limit, band) {
     country: 'US',
     fields: ['id', 'bundle', 'name', 'category', 'category_type',
       'downloads_daily', 'downloads_exact', 'downloads_mark', 'revenue_month',
-      'developer_name', 'developer_id', 'url_appstorespy'],
-    filter: {
-      published: true,
-      category_type: 'APP',
-      category,
-      downloads_daily: { gte: dailyMin, lte: dailyMax }
-    }
+      'rating_avg', 'rating_count', 'developer_name', 'developer_id', 'url_appstorespy'],
+    filter: filter
   };
   const res = await fetchWithBackoff(A.apiUrl + A.endpoint, {
     method: 'POST', headers: headers(), body: JSON.stringify(body)
@@ -94,6 +96,8 @@ function mapAppRow(row) {
     appInstallsDaily: dd,
     appInstallsMonth: dd * 30,
     revenueMonth: Number(row.revenue_month || 0),
+    ratingAvg: Number(row.rating_avg || 0),
+    ratingCount: Number(row.rating_count || 0),
     storeLink: bundle
       ? 'https://play.google.com/store/apps/details?id=' + bundle
       : String(row.url_appstorespy || '')
@@ -109,10 +113,13 @@ function buildCandidate(appRow, dev) {
     devName: appRow.devName || String(dev.name || ''),
     devId: appRow.devId,
     email,
-    installsPerMonth: appRow.appInstallsMonth || ipd * 30,
+    // Developer-level installs so daily & monthly are consistent (monthly = 30×daily).
     installsPerDay: ipd,
+    installsPerMonth: ipd * 30,
     appsCount: totalApps,
     revenuePerMonth: appRow.revenueMonth || 0,
+    ratingAvg: appRow.ratingAvg || 0,
+    ratingCount: appRow.ratingCount || 0,
     storeLink: appRow.storeLink || String(dev.url || ''),
     priority: ipd * totalApps,
     topApp: appRow.appName || '',

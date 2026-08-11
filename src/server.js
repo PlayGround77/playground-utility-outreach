@@ -203,13 +203,14 @@ function makeApp() {
         : esc(l.top_app || '');
 
       const rows = shown.slice(0, 500).map((l) => `<tr>
-        <td title="${esc(l.name)}"><b>${esc(l.name)}</b></td>
+        <td title="${esc(l.name)}"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></td>
         <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}${appBadge(l)}</td>
         <td class="muted">${esc(l.category)}</td>
         <td class="num">${num(l.installs_day)}</td>
         <td class="num">${num(l.installs_month)}</td>
         <td class="num">${num(l.apps_count)}</td>
         <td class="num">$${num(l.revenue_month)}</td>
+        <td class="num">${Number(l.rating_avg) ? '★' + Number(l.rating_avg).toFixed(1) + ' <span class="muted">(' + num(l.rating_count) + ')</span>' : ''}</td>
         <td class="num">${num(l.priority)}</td>
         <td class="ell" title="${esc(l.email)}">${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''}</td>
         <td>${l.store_link ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">↗</a>` : ''}</td>
@@ -297,6 +298,7 @@ function makeApp() {
               <label>Installs / month — min<input name="installsMin" value="${esc(crit.installsMin)}"></label>
               <label>Installs / month — max<input name="installsMax" value="${esc(crit.installsMax)}"></label>
               <label>Min apps per studio<input name="minApps" value="${esc(crit.minApps)}"></label>
+              <label>Min rating (0–5, 0 = any)<input name="minRating" value="${esc(crit.minRating)}"></label>
               <label>Max revenue / month ($)<input name="revenueMax" value="${esc(crit.revenueMax)}"></label>
               <label>Flag giants above priority<input name="maxPriority" value="${esc(crit.maxPriority)}"></label>
               <label>Pages per category<input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
@@ -307,6 +309,12 @@ function makeApp() {
           </form>
         </details>
 
+        <form id="bulkform" method="post" action="/bulk"></form>
+        <div class="bar" style="margin:.4rem 0">
+          <label><input type="checkbox" onclick="document.querySelectorAll('.rowchk').forEach(function(c){c.checked=this.checked}.bind(this))"> Select all shown</label>
+          <button form="bulkform" name="action" value="block" onclick="return confirm('Block the selected leads?')">⛔ Block selected</button>
+          <button form="bulkform" name="action" value="delete" onclick="return confirm('Delete the selected leads permanently?')">🗑 Delete selected</button>
+        </div>
         <form method="get" action="/" style="margin:.4rem 0;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
           <label>View:
             <select name="view" onchange="this.form.submit()">
@@ -320,7 +328,7 @@ function makeApp() {
         <div class="card wrap"><table>
           <thead><tr>
             <th>Studio</th><th>App</th><th>Category</th><th>Inst/day</th><th>Inst/mo</th>
-            <th>Apps</th><th>Rev/mo</th><th>Priority</th><th>Email</th><th>Store</th>
+            <th>Apps</th><th>Rev/mo</th><th>Rating</th><th>Priority</th><th>Email</th><th>Store</th>
             <th>Outreach status</th><th>Response status</th><th>Group</th><th></th>
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="14" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
@@ -373,6 +381,20 @@ function makeApp() {
   app.post('/action/:id/delete', async (req, res) => {
     try { await db.deleteLead(Number(req.params.id)); return back(res, 'Lead deleted.'); }
     catch (e) { return back(res, '⚠️ Delete failed: ' + e.message); }
+  });
+  app.post('/bulk', async (req, res) => {
+    let ids = req.body.ids || [];
+    if (!Array.isArray(ids)) ids = [ids];
+    ids = ids.map(Number).filter(Boolean);
+    const action = req.body.action;
+    let n = 0;
+    try {
+      for (const id of ids) {
+        if (action === 'delete') { await db.deleteLead(id); n++; }
+        else if (action === 'block') { await db.updateLead(id, { grp: config.groups.blockList }); n++; }
+      }
+    } catch (e) { return back(res, '⚠️ Bulk action failed: ' + e.message); }
+    return back(res, `${action === 'delete' ? 'Deleted' : 'Blocked'} ${n} selected lead(s).`);
   });
   const back = (res, m) => res.redirect('/?msg=' + encodeURIComponent(m));
 

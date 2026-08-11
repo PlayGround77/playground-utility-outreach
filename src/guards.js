@@ -31,6 +31,42 @@ const BRAND_NAMES = [
 ];
 const GENERIC_MAIL_DOMAINS = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com'];
 
+// Official companies / governments — they will never hand over their apps.
+const OFFICIAL_EMAIL_DOMAINS = [
+  'apple.com', 'google.com', 'gmail.google.com', 'samsung.com', 'microsoft.com',
+  'amazon.com', 'meta.com', 'facebook.com', 'adobe.com', 'huawei.com', 'xiaomi.com',
+  'oppo.com', 'vivo.com', 'sony.com', 'lg.com', 'lge.com', 'intel.com', 'oracle.com',
+  'ibm.com', 'nvidia.com', 'yandex.com', 'yandex.ru', 'mozilla.org', 'opera.com',
+  'spotify.com', 'netflix.com', 'paypal.com', 'uber.com', 'airbnb.com'
+];
+const OFFICIAL_NAME_KEYWORDS = [
+  'national informatics', 'informatics centre', 'informatics center', 'ministry',
+  'municipal', 'e-governance', 'national portal', 'government of', 'govt of'
+];
+const BIG_BRAND_NAMES = [
+  'apple', 'google', 'samsung', 'microsoft', 'huawei', 'xiaomi', 'oppo', 'vivo',
+  'sony', 'lg electronics', 'intel', 'oracle', 'ibm', 'nvidia', 'amazon',
+  'meta platforms', 'adobe', 'yandex', 'mozilla', 'spotify', 'netflix', 'paypal', 'uber'
+];
+function isGovDomain(d) {
+  return /(^|\.)gov(\.[a-z]{2,3})*$/.test(d) || /\.go\.[a-z]{2}$/.test(d) ||
+    /\.gob\.[a-z]{2}$/.test(d) || /\.gouv\.[a-z]{2}$/.test(d) || /\.mil$/.test(d);
+}
+
+// Competitor publishers — their studios won't sell/hand over apps to us.
+// Matched by exact (case-insensitive) developer/account name.
+const COMPETITOR_ACCOUNTS = new Set([
+  'altrum', 'battery stats saver', 'beat blend labs', 'bizcraft apps',
+  'dictionaryandtranslator', 'dosa apps', 'dzine media', 'dzine media apps',
+  'eagle apps', 'eco mobile', 'eco mobile connect', 'eco mobile editor',
+  'eco mobile for work', 'eco mobile security', 'eco mobile style', 'eco mobile tools',
+  'jrt studio music players', 'lime spark apps', 'manuelitagg', 'mobile tools pro',
+  'omega centauri software', 'one music player',
+  'photo & video editors - instant solution', 'pipi chick studio',
+  'prometheus interactive llc', 'smart mobile tools', 'tarrysoft', 'trostun apps',
+  'wallet passes alliance', 'zipoapps', 'zipoby'
+]);
+
 const DISPOSABLE_DOMAINS = [
   'mailinator.com', 'guerrillamail.com', '10minutemail.com', 'tempmail.com',
   'trashmail.com', 'yopmail.com', 'sharklasers.com', 'getnada.com'
@@ -90,6 +126,15 @@ function screenReason(cand) {
   if (GENERIC_MAIL_DOMAINS.includes(domain)) {
     for (const brand of BRAND_NAMES) if (wordIncludes(name, brand)) return 'brand_impersonation';
   }
+
+  // 5b. Official companies & governments (won't sell / hand over their apps)
+  if (OFFICIAL_EMAIL_DOMAINS.includes(domain)) return 'official_company:domain';
+  if (isGovDomain(domain)) return 'government:domain';
+  for (const kw of OFFICIAL_NAME_KEYWORDS) if (nameLc.includes(kw)) return 'official_name';
+  for (const b of BIG_BRAND_NAMES) if (wordIncludes(name, b)) return 'official_brand';
+
+  // 5c. Competitor publishers (their studios won't sell to us)
+  if (COMPETITOR_ACCOUNTS.has(nameLc.trim())) return 'competitor';
 
   // 6. Top-app sanity
   const topApp = String(cand.topApp || '');
