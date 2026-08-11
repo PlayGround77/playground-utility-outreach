@@ -77,6 +77,19 @@ async function runPoolRefill(force) {
           const reason = screenCandidate(cand, index, crit);
           if (reason) { bump(reason); continue; }
 
+          // Review-mining (only for keepers, to control API credits): boost the
+          // Opportunity Score when users complain about price/ads/willingness to pay.
+          if (crit.scanReviews && appRow.appBundle) {
+            try {
+              const sig = ass.scanReviewSignals(await ass.fetchReviews(appRow.appBundle));
+              if (sig.count) {
+                cand.reviewSignals = sig.count;
+                cand.reviewEvidence = sig.samples.join('  |  ');
+                cand.opportunity = Math.min(100, cand.opportunity + Math.min(20, sig.count * 4));
+              }
+            } catch (e) { /* reviews are optional */ }
+          }
+
           // Sourcing always writes to our own DB (safe + needed for review).
           // Only EMAIL sending is gated by DRY_RUN. insertLead skips duplicates.
           const newId = await db.insertLead({
@@ -87,7 +100,8 @@ async function runPoolRefill(force) {
             ratingAvg: cand.ratingAvg, ratingCount: cand.ratingCount,
             installsTotal: cand.installsTotal, revPerInstall: cand.revPerInstall,
             hasIap: cand.hasIap, hasAds: cand.hasAds, website: cand.website,
-            lastUpdate: cand.lastUpdate, opportunity: cand.opportunity
+            lastUpdate: cand.lastUpdate, opportunity: cand.opportunity,
+            reviewSignals: cand.reviewSignals || 0, reviewEvidence: cand.reviewEvidence || ''
           });
           // Email already exists from a previous run → add this app to it.
           if (!newId) { await db.appendApp('email', cand.email, cand.topApp); bump('merged_into_existing'); continue; }

@@ -78,6 +78,38 @@ async function queryApps(category, page, limit, crit) {
   return json.data || [];
 }
 
+// Review-mining: acquisition-signal phrases (willingness to pay / poor monetization).
+const REVIEW_SIGNALS = [
+  /too expensive/i, /so expensive/i, /overpriced/i, /should be free/i,
+  /wish (it|this) (was|were) free/i, /would pay if/i, /i would pay/i, /i'?d pay/i,
+  /not worth (the|it|paying|the money)/i, /too many ads/i, /so many ads/i, /remove ads/i,
+  /waste of money/i, /rip\s?off/i, /cancel(l?ed)? (my )?subscription/i,
+  /expensive subscription/i, /make it free/i, /free version/i, /pay\s?wall/i, /way too much/i
+];
+
+/** GET /play/apps/{bundle}/reviews → array of review text strings. */
+async function fetchReviews(bundle) {
+  await countCall();
+  const url = A.apiUrl + '/play/apps/' + encodeURIComponent(bundle) +
+    '/reviews?country=US&language=en&limit=50&sort=stars';
+  const res = await fetchWithBackoff(url, { method: 'GET', headers: headers() });
+  const json = await res.json().catch(() => []);
+  const arr = Array.isArray(json) ? json : (json.data || json.reviews || []);
+  return arr.map((r) => `${r.title || ''} ${r.text || r.body || r.review || r.content || r.comment || ''}`.trim()).filter(Boolean);
+}
+
+/** Count acquisition-signal reviews; return { count, samples[] }. */
+function scanReviewSignals(texts) {
+  const samples = [];
+  let count = 0;
+  for (const t of texts || []) {
+    for (const re of REVIEW_SIGNALS) {
+      if (re.test(t)) { count++; if (samples.length < 3) samples.push(t.slice(0, 160)); break; }
+    }
+  }
+  return { count, samples };
+}
+
 /** GET /play/developers/{id} → PlayDev (email[], total_apps, ipd, revenue, ...). */
 async function getDeveloper(devId) {
   await countCall();
@@ -96,6 +128,7 @@ function mapAppRow(row) {
     devId: String(row.developer_id || ''),
     devName: String(row.developer_name || ''),
     appName: String(row.name || ''),
+    appBundle: bundle,
     appCategory: String(row.category || ''),
     appInstallsDaily: dd,
     appInstallsMonth: dd * 30,
@@ -176,4 +209,4 @@ function buildCandidate(appRow, dev) {
   };
 }
 
-module.exports = { queryApps, getDeveloper, mapAppRow, buildCandidate, underCallCap, headers };
+module.exports = { queryApps, getDeveloper, mapAppRow, buildCandidate, fetchReviews, scanReviewSignals, underCallCap, headers };

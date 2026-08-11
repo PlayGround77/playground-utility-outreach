@@ -205,7 +205,7 @@ function makeApp() {
       const rows = shown.slice(0, 500).map((l) => `<tr>
         <td title="${esc(l.name)}"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></td>
         <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}${appBadge(l)}</td>
-        <td class="num"><b style="color:${l.opportunity >= 70 ? '#059669' : l.opportunity >= 45 ? '#b45309' : 'inherit'}">${num(l.opportunity)}</b></td>
+        <td class="num"><b style="color:${l.opportunity >= 70 ? '#059669' : l.opportunity >= 45 ? '#b45309' : 'inherit'}">${num(l.opportunity)}</b>${Number(l.review_signals) ? ` <span class="badge" title="${esc(l.review_evidence)}">💬${l.review_signals}</span>` : ''}</td>
         <td class="muted">${esc(l.category)}</td>
         <td class="num">${num(l.installs_day)}</td>
         <td class="num">${num(l.installs_total)}</td>
@@ -308,6 +308,10 @@ function makeApp() {
               <label>Pages per category<input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
               <label>Source target (apps)<input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
             </div>
+            <label style="display:flex;align-items:center;gap:.4rem;margin:.4rem 0">
+              <input type="checkbox" name="scanReviews" ${crit.scanReviews ? 'checked' : ''}>
+              Mine reviews for buy-signals (“too expensive”, “should be free”…) — boosts Opportunity, uses more API credits
+            </label>
             <button class="primary" title="Save these search criteria to the database; they take effect on the next “Source now” and scheduled refill">Save criteria</button>
             <span class="muted" style="font-size:.78rem">Valid: ${criteria.VALID_CATEGORIES.join(', ')}</span>
           </form>
@@ -428,6 +432,7 @@ function makeApp() {
           <hr style="border:none;border-top:1px solid var(--line);margin:.8rem 0">
           <div style="line-height:1.6">${html}</div>
         </div>
+        ${Number(lead.review_signals) ? `<div class="card" style="padding:1rem;max-width:760px;margin-top:1rem"><b>💬 Buy-signals found in reviews (${lead.review_signals}):</b><br><span class="muted">${esc(lead.review_evidence)}</span></div>` : ''}
         <p style="margin-top:1rem">
           <form method="post" action="/action/${lead.id}/send" onsubmit="return confirm('Send this email now?')"><button class="send" title="Send this exact email now (respects DRY_RUN)">✉ Send this now</button></form>
           <a href="/" style="margin-left:.6rem">Cancel</a>
@@ -462,7 +467,10 @@ function makeApp() {
     res.redirect('/');
   });
   app.post('/criteria', async (req, res) => {
-    try { await criteria.set(req.body || {}); } catch (e) { console.error('[criteria]', e.message); }
+    try {
+      req.body.scanReviews = req.body.scanReviews ? 'true' : 'false'; // checkbox: absent = off
+      await criteria.set(req.body || {});
+    } catch (e) { console.error('[criteria]', e.message); }
     res.redirect('/');
   });
   app.post('/mode', async (req, res) => {

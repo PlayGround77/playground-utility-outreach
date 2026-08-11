@@ -46,6 +46,8 @@ async function init() {
       website       TEXT NOT NULL DEFAULT '',
       last_update   TEXT NOT NULL DEFAULT '',
       opportunity   INTEGER NOT NULL DEFAULT 0,
+      review_signals INTEGER NOT NULL DEFAULT 0,
+      review_evidence TEXT NOT NULL DEFAULT '',
       grp           TEXT NOT NULL DEFAULT '',
       developer_id  TEXT NOT NULL DEFAULT '',
       message_id    TEXT NOT NULL DEFAULT '',
@@ -71,7 +73,9 @@ async function init() {
     'has_ads BOOLEAN NOT NULL DEFAULT false',
     "website TEXT NOT NULL DEFAULT ''",
     "last_update TEXT NOT NULL DEFAULT ''",
-    'opportunity INTEGER NOT NULL DEFAULT 0'
+    'opportunity INTEGER NOT NULL DEFAULT 0',
+    'review_signals INTEGER NOT NULL DEFAULT 0',
+    "review_evidence TEXT NOT NULL DEFAULT ''"
   ]) {
     await q(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ${col};`);
   }
@@ -106,8 +110,9 @@ async function insertLead(lead) {
     `INSERT INTO leads
        (name,email,priority,top_app,apps_json,store_link,grp,developer_id,
         category,installs_day,installs_month,revenue_month,apps_count,rating_avg,rating_count,
-        installs_total,rev_per_install,has_iap,has_ads,website,last_update,opportunity)
-     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
+        installs_total,rev_per_install,has_iap,has_ads,website,last_update,opportunity,
+        review_signals,review_evidence)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
      WHERE $2 = '' OR NOT EXISTS (SELECT 1 FROM leads WHERE email <> '' AND lower(email) = lower($2))
      RETURNING id`,
     [lead.name, lead.email, lead.priority || 0, lead.topApp || '', appsJson, lead.storeLink || '',
@@ -115,7 +120,8 @@ async function insertLead(lead) {
       lead.installsDay || 0, lead.installsMonth || 0, lead.revenueMonth || 0, lead.appsCount || 0,
       lead.ratingAvg || 0, lead.ratingCount || 0,
       lead.installsTotal || 0, lead.revPerInstall || 0, !!lead.hasIap, !!lead.hasAds,
-      lead.website || '', lead.lastUpdate || '', lead.opportunity || 0]
+      lead.website || '', lead.lastUpdate || '', lead.opportunity || 0,
+      lead.reviewSignals || 0, lead.reviewEvidence || '']
   );
   return r.rows.length ? r.rows[0].id : null;
 }

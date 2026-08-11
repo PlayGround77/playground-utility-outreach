@@ -35,6 +35,7 @@ function defaults() {
     minRating: Number(process.env.MIN_RATING) || 4.3,                    // proven quality
     minRatingCount: Number(process.env.MIN_RATING_COUNT) || 50,          // reliable rating
     maxApps: Number(process.env.MAX_APPS_PER_DEV) || 40,                 // avoid giant farms
+    scanReviews: process.env.SCAN_REVIEWS === 'false' ? false : true,    // mine reviews for buy-signals (costs credits)
     revenueMax: config.appStoreSpy.revenueMaxPerMonth,
     maxPriority: Number(process.env.MAX_PRIORITY) || 100000000, // flag giants above this (priority = ipd × apps)
     pagesPerCategory: config.appStoreSpy.pagesPerCategory,
@@ -58,6 +59,10 @@ function sanitize(input, base) {
       .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
       .filter((c) => VALID_CATEGORIES.includes(c));
     if (list.length) out.categories = Array.from(new Set(list));
+  }
+  if ('scanReviews' in input) {
+    out.scanReviews = input.scanReviews === true || input.scanReviews === 'true' ||
+      input.scanReviews === 'on' || input.scanReviews === '1';
   }
   for (const f of ['installsMin', 'installsMax', 'minApps', 'installsTotalMin', 'installsTotalMax', 'minRating', 'minRatingCount', 'maxApps', 'revenueMax', 'maxPriority', 'pagesPerCategory', 'refillTarget']) {
     if (input[f] !== undefined && input[f] !== '') {
