@@ -7,11 +7,16 @@ const config = require('./config');
 let transporter;
 function tx() {
   if (!transporter) {
+    const port = config.gmail.smtpPort;
     transporter = nodemailer.createTransport({
       host: config.gmail.smtpHost,
-      port: config.gmail.smtpPort,
-      secure: true,
-      auth: { user: config.gmail.user, pass: config.gmail.pass }
+      port: port,
+      secure: port === 465,        // SSL for 465; STARTTLS for 587
+      requireTLS: port !== 465,
+      auth: { user: config.gmail.user, pass: (config.gmail.pass || '').replace(/\s+/g, '') },
+      connectionTimeout: 15000,
+      greetingTimeout: 10000,
+      socketTimeout: 20000
     });
   }
   return transporter;

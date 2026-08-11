@@ -46,7 +46,9 @@ const config = {
     user: process.env.GMAIL_USER || '',
     pass: process.env.GMAIL_APP_PASSWORD || '',
     smtpHost: 'smtp.gmail.com',
-    smtpPort: 465,
+    // 587 (STARTTLS) is the most reliable on cloud hosts; 465 (SSL) is often
+    // blocked. Override with SMTP_PORT if needed.
+    smtpPort: num(process.env.SMTP_PORT, 587),
     imapHost: 'imap.gmail.com',
     imapPort: 993
   },
