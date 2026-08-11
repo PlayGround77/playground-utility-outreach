@@ -165,11 +165,23 @@ function makeApp() {
       const gmailConnected = await email.isConnected();
       const redirectUri = baseUrl(req) + '/oauth/callback';
 
+      // View filter (defaults to hiding the Block List).
+      const view = req.query.view || 'nonblocked';
+      const BL = config.groups.blockList, RP = config.groups.replied;
+      const R = config.responses;
+      let shown = leads;
+      if (view === 'nonblocked') shown = leads.filter((l) => l.grp !== BL);
+      else if (view === 'queue') shown = leads.filter((l) => !l.outreach && l.email && l.grp !== BL && l.grp !== RP);
+      else if (view === 'contacted') shown = leads.filter((l) => l.outreach && l.grp !== BL);
+      else if (view === 'replied') shown = leads.filter((l) => l.response === R.respond);
+      else if (view === 'blocked') shown = leads.filter((l) => l.grp === BL);
+      // 'all' → no filter
+
       const appCell = (l) => l.store_link
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
         : esc(l.top_app || '');
 
-      const rows = leads.slice(0, 500).map((l) => `<tr>
+      const rows = shown.slice(0, 500).map((l) => `<tr>
         <td title="${esc(l.name)}"><b>${esc(l.name)}</b></td>
         <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}</td>
         <td class="muted">${esc(l.category)}</td>
@@ -272,7 +284,16 @@ function makeApp() {
           </form>
         </details>
 
-        <p class="legend">The <b>Studio</b> and <b>Actions</b> (✉ Send / ⛔ Block) columns stay pinned; scroll the table sideways for status &amp; details.</p>
+        <form method="get" action="/" style="margin:.4rem 0;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+          <label>View:
+            <select name="view" onchange="this.form.submit()">
+              ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['blocked', 'Blocked only']]
+                .map(([v, l]) => `<option value="${v}"${view === v ? ' selected' : ''}>${l}</option>`).join('')}
+            </select>
+          </label>
+          <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
+        </form>
+        <p class="legend">The <b>Studio</b> and <b>Actions</b> columns stay pinned; scroll the table sideways for status &amp; details.</p>
         <div class="card wrap"><table>
           <thead><tr>
             <th>Studio</th><th>App</th><th>Category</th><th>Inst/day</th><th>Inst/mo</th>
@@ -293,7 +314,7 @@ function makeApp() {
           <b>AUTO send</b> = the scheduler sends automatically every 15 min in the window.
           Either way, <b>nothing is sent while <code>DRY_RUN=true</code></b> (the master safety in Railway) — that is the go-live gate.
         </p>
-        <p class="legend">Showing up to 500 of ${leads.length} leads.</p>
+        <p class="legend">Showing up to 500 of ${shown.length} matching leads (${leads.length} total).</p>
         <script>
         (function(){
           var el=document.getElementById('nexttick'); if(!el) return;
