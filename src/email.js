@@ -1,106 +1,122 @@
 'use strict';
 
-const nodemailer = require('nodemailer');
-const { ImapFlow } = require('imapflow');
+const { google } = require('googleapis');
 const config = require('./config');
+const db = require('./db');
 
-let transporter;
-function tx() {
-  if (!transporter) {
-    const port = config.gmail.smtpPort;
-    transporter = nodemailer.createTransport({
-      host: config.gmail.smtpHost,
-      port: port,
-      secure: port === 465,        // SSL for 465; STARTTLS for 587
-      requireTLS: port !== 465,
-      auth: { user: config.gmail.user, pass: (config.gmail.pass || '').replace(/\s+/g, '') },
-      connectionTimeout: 15000,
-      greetingTimeout: 10000,
-      socketTimeout: 20000
-    });
-  }
-  return transporter;
+const TOKEN_KEY = 'google_refresh_token';
+
+function oauthClient(redirectUri) {
+  return new google.auth.OAuth2(config.google.clientId, config.google.clientSecret, redirectUri);
+}
+
+async function isConnected() {
+  return !!(await db.getSetting(TOKEN_KEY, null));
+}
+
+async function gmail() {
+  const refresh = await db.getSetting(TOKEN_KEY, null);
+  if (!refresh) throw new Error('Gmail not connected — click “Connect Gmail” on the dashboard.');
+  const o = oauthClient();
+  o.setCredentials({ refresh_token: refresh });
+  return google.gmail({ version: 'v1', auth: o });
 }
 
 function fromHeader() {
-  return config.brand.ownerName
-    ? `"${config.brand.ownerName}" <${config.gmail.user}>`
-    : config.gmail.user;
+  return config.gmail.user
+    ? (config.brand.ownerName ? `"${config.brand.ownerName}" <${config.gmail.user}>` : config.gmail.user)
+    : 'me';
+}
+
+function encodeHeader(s) {
+  return /^[\x00-\x7F]*$/.test(s) ? s : '=?UTF-8?B?' + Buffer.from(s, 'utf8').toString('base64') + '?=';
+}
+function b64url(buf) {
+  return Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function newMessageId() {
+  const dom = (config.gmail.user.split('@')[1]) || 'mail.local';
+  return `<${Date.now()}.${Math.random().toString(36).slice(2)}@${dom}>`;
+}
+
+function buildMime(to, subject, html, messageId, inReplyTo) {
+  const headers = [
+    'From: ' + fromHeader(),
+    'To: ' + to,
+    'Subject: ' + encodeHeader(subject),
+    'Message-ID: ' + messageId,
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64'
+  ];
+  if (inReplyTo) { headers.push('In-Reply-To: ' + inReplyTo); headers.push('References: ' + inReplyTo); }
+  const body = Buffer.from(html, 'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n');
+  return headers.join('\r\n') + '\r\n\r\n' + body;
 }
 
 /**
- * Send an email. For follow-ups pass inReplyTo (the initial Message-ID) to keep
- * one Gmail thread. Returns the sent Message-ID (store it for threading + reply
- * matching).
+ * Send an email via the Gmail API. For follow-ups pass inReplyTo (the initial
+ * Message-ID) and threadId to keep one Gmail thread. Returns { messageId, threadId }.
  */
-async function send({ to, subject, html, inReplyTo }) {
-  const opts = { from: fromHeader(), to, subject, html };
-  if (inReplyTo) {
-    opts.inReplyTo = inReplyTo;
-    opts.references = inReplyTo;
-    if (!/^re:/i.test(subject)) opts.subject = 'Re: ' + subject;
-  }
-  const info = await tx().sendMail(opts);
-  return info.messageId;
+async function send({ to, subject, html, inReplyTo, threadId }) {
+  const g = await gmail();
+  const messageId = newMessageId();
+  const subj = inReplyTo && !/^re:/i.test(subject) ? 'Re: ' + subject : subject;
+  const raw = b64url(buildMime(to, subj, html, messageId, inReplyTo));
+  const requestBody = { raw };
+  if (threadId) requestBody.threadId = threadId;
+  const res = await g.users.messages.send({ userId: 'me', requestBody });
+  return { messageId, threadId: res.data.threadId || '' };
 }
 
-/** Plain notification email (daily summary / alerts). */
+/** Plain notification email (daily summary / alerts / self-test). */
 async function notify(to, subject, text) {
-  await tx().sendMail({ from: fromHeader(), to, subject, text });
+  const g = await gmail();
+  const messageId = newMessageId();
+  const headers = [
+    'From: ' + fromHeader(), 'To: ' + to, 'Subject: ' + encodeHeader(subject),
+    'Message-ID: ' + messageId, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8'
+  ];
+  const mime = headers.join('\r\n') + '\r\n\r\n' + text;
+  await g.users.messages.send({ userId: 'me', requestBody: { raw: b64url(mime) } });
+}
+
+function headerVal(payload, name) {
+  const h = (payload && payload.headers || []).filter((x) => x.name.toLowerCase() === name.toLowerCase())[0];
+  return h ? h.value : '';
 }
 
 /**
- * Scan the INBOX over the last `sinceDays` days and return sets of:
- *   replyEmails  — sender addresses that wrote to us (i.e. replies)
- *   bounceEmails — recipient addresses found inside mailer-daemon/postmaster bounces
+ * Scan the inbox (last `days` days) via the Gmail API and return sets of:
+ *   replyEmails  — senders who wrote to us (replies)
+ *   bounceEmails — recipient addresses found in mailer-daemon/postmaster bounces
  */
-async function scanInbox(sinceDays) {
-  const days = sinceDays || 30;
-  const client = new ImapFlow({
-    host: config.gmail.imapHost, port: config.gmail.imapPort, secure: true,
-    auth: { user: config.gmail.user, pass: config.gmail.pass }, logger: false
-  });
+async function scanInbox(days) {
+  const g = await gmail();
+  const me = config.gmail.user.toLowerCase();
   const replyEmails = new Set();
   const bounceEmails = new Set();
-  const me = config.gmail.user.toLowerCase();
 
-  await client.connect();
-  const lock = await client.getMailboxLock('INBOX');
-  try {
-    const since = new Date(Date.now() - days * 86400000);
-    const daemonUids = [];
+  const list = await g.users.messages.list({ userId: 'me', q: `in:inbox newer_than:${days || 30}d`, maxResults: 200 });
+  const ids = (list.data.messages || []).map((m) => m.id);
 
-    for await (const msg of client.fetch({ since }, { uid: true, envelope: true })) {
-      const from = (msg.envelope && msg.envelope.from && msg.envelope.from[0] && msg.envelope.from[0].address || '').toLowerCase();
-      if (!from || from === me) continue;
-      if (from.includes('mailer-daemon') || from.includes('postmaster')) {
-        daemonUids.push(msg.uid);
-      } else {
-        replyEmails.add(from);
-      }
+  for (const id of ids) {
+    const msg = await g.users.messages.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['From'] });
+    const from = (headerVal(msg.data.payload, 'From') || '').toLowerCase();
+    const addr = (from.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i) || [''])[0];
+    if (!addr || addr === me) continue;
+
+    if (from.includes('mailer-daemon') || from.includes('postmaster')) {
+      const found = String(msg.data.snippet || '').match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi) || [];
+      found.forEach((a) => {
+        const l = a.toLowerCase();
+        if (l !== me && !l.includes('mailer-daemon') && !l.includes('postmaster') && !l.includes('google')) bounceEmails.add(l);
+      });
+    } else {
+      replyEmails.add(addr);
     }
-
-    // For bounces, download the source and extract every address mentioned.
-    for (const uid of daemonUids) {
-      try {
-        const dl = await client.download(uid, undefined, { uid: true });
-        const chunks = [];
-        for await (const c of dl.content) chunks.push(c);
-        const text = Buffer.concat(chunks).toString('utf8');
-        const found = text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi) || [];
-        for (const addr of found) {
-          const a = addr.toLowerCase();
-          if (a !== me && !a.includes('mailer-daemon') && !a.includes('postmaster') && !a.includes('googlemail')) {
-            bounceEmails.add(a);
-          }
-        }
-      } catch (e) { /* skip unreadable bounce */ }
-    }
-  } finally {
-    lock.release();
   }
-  await client.logout();
   return { replyEmails, bounceEmails };
 }
 
-module.exports = { send, notify, scanInbox };
+module.exports = { send, notify, scanInbox, isConnected, oauthClient, TOKEN_KEY };

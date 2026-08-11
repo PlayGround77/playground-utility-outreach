@@ -17,6 +17,9 @@ function windowOpen() {
   const h = t.hour();
   return h >= config.sender.windowStartHour && h < config.sender.windowEndHour;
 }
+function baseUrl(req) {
+  return (req.headers['x-forwarded-proto'] || req.protocol) + '://' + req.headers.host;
+}
 
 function num(n) { return Number(n || 0).toLocaleString('en-US'); }
 function esc(s) {
@@ -158,6 +161,8 @@ function makeApp() {
       const wOpen = windowOpen();
       const quota = dailyQuota();
       const dupCount = await db.countDuplicates();
+      const gmailConnected = await email.isConnected();
+      const redirectUri = baseUrl(req) + '/oauth/callback';
 
       const appCell = (l) => l.store_link
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
@@ -192,6 +197,9 @@ function makeApp() {
         auto: '<span class="pill auto">AUTO send</span>'
       };
       const sendPill = PILLS[sendMode] || PILLS.manual;
+      const gmailPill = gmailConnected
+        ? '<span class="pill auto">Gmail ✓</span>'
+        : '<span class="pill live">Gmail not connected</span>';
       const modeBtn = (v, label, title) =>
         `<form method="post" action="/mode"><input type="hidden" name="value" value="${v}"><button class="${sendMode === v ? 'primary' : ''}" title="${title}">${label}</button></form>`;
       const modeCtl =
@@ -204,7 +212,7 @@ function makeApp() {
       res.send(shell(`
         <header>
           <h1>${esc(config.brand.companyName)} Utility Outreach</h1>
-          ${mode} ${sendPill}
+          ${mode} ${sendPill} ${gmailPill}
           <div class="toolbar">
             <form method="post" action="/run/refill"><button class="primary" title="Fetch new utility-app studios from AppStoreSpy using the search criteria below, screen them, and add them as leads">Source now</button></form>
             <form method="post" action="/run/send"><button title="Send one paced batch now to leads in the queue — respects the daily quota, the send window, and DRY_RUN">Send tick</button></form>
@@ -217,6 +225,13 @@ function makeApp() {
         </header>
 
         ${msg ? `<div class="banner">${msg}</div>` : ''}
+
+        ${!gmailConnected ? `<div class="banner">📧 <b>Gmail is not connected</b> — no email can be sent until you connect it.
+          ${config.google.clientId
+            ? '<form method="get" action="/oauth/start" style="display:inline;margin-left:.5rem"><button class="primary">🔗 Connect Gmail</button></form>'
+            : ' Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in Railway first (see setup).'}
+          <div style="font-size:.8rem;margin-top:.4rem;opacity:.85">In Google Cloud, register this exact Authorized redirect URI: <code>${esc(redirectUri)}</code></div>
+        </div>` : ''}
 
         <div class="status">
           <span>Window: <b>${wOpen ? 'OPEN' : 'closed'}</b> (${config.sender.windowStartHour}:00–${config.sender.windowEndHour}:00, Mon–Fri)</span>
@@ -351,6 +366,30 @@ function makeApp() {
   app.post('/admin/dedupe', async (req, res) => {
     try { const n = await db.removeDuplicates(); return back(res, `🔁 Removed ${n} duplicate lead${n === 1 ? '' : 's'} (kept one per email).`); }
     catch (e) { return back(res, '⚠️ Dedupe failed: ' + e.message); }
+  });
+
+  // Gmail OAuth (HTTPS) — connect the sending mailbox without SMTP.
+  app.get('/oauth/start', (req, res) => {
+    if (!config.google.clientId) return back(res, '⚠️ Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Railway first.');
+    const o = email.oauthClient(baseUrl(req) + '/oauth/callback');
+    const url = o.generateAuthUrl({
+      access_type: 'offline',
+      prompt: 'consent',
+      scope: ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.readonly']
+    });
+    res.redirect(url);
+  });
+  app.get('/oauth/callback', async (req, res) => {
+    try {
+      if (req.query.error) return back(res, 'Gmail connect cancelled: ' + req.query.error);
+      const o = email.oauthClient(baseUrl(req) + '/oauth/callback');
+      const { tokens } = await o.getToken(req.query.code);
+      if (tokens.refresh_token) {
+        await db.setSetting(email.TOKEN_KEY, tokens.refresh_token);
+        return back(res, '✅ Gmail connected! Try “✉ Test to me” to verify.');
+      }
+      return back(res, '⚠️ Connected but Google returned no refresh token. Set the OAuth app to “In production” in Google Cloud, then Connect Gmail again.');
+    } catch (e) { return back(res, 'Gmail connect failed: ' + e.message); }
   });
 
   app.post('/run/refill', (req, res) => {

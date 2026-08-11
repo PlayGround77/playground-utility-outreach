@@ -39,6 +39,7 @@ async function init() {
       grp           TEXT NOT NULL DEFAULT '',
       developer_id  TEXT NOT NULL DEFAULT '',
       message_id    TEXT NOT NULL DEFAULT '',
+      thread_id     TEXT NOT NULL DEFAULT '',
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -49,7 +50,8 @@ async function init() {
     'installs_day BIGINT NOT NULL DEFAULT 0',
     'installs_month BIGINT NOT NULL DEFAULT 0',
     'revenue_month BIGINT NOT NULL DEFAULT 0',
-    'apps_count INTEGER NOT NULL DEFAULT 0'
+    'apps_count INTEGER NOT NULL DEFAULT 0',
+    "thread_id TEXT NOT NULL DEFAULT ''"
   ]) {
     await q(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ${col};`);
   }

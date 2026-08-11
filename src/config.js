@@ -43,14 +43,14 @@ const config = {
   },
 
   gmail: {
-    user: process.env.GMAIL_USER || '',
-    pass: process.env.GMAIL_APP_PASSWORD || '',
-    smtpHost: 'smtp.gmail.com',
-    // 587 (STARTTLS) is the most reliable on cloud hosts; 465 (SSL) is often
-    // blocked. Override with SMTP_PORT if needed.
-    smtpPort: num(process.env.SMTP_PORT, 587),
-    imapHost: 'imap.gmail.com',
-    imapPort: 993
+    user: process.env.GMAIL_USER || ''  // the sending mailbox / From address
+  },
+
+  // Gmail API over HTTPS (port 443 — never blocked, unlike SMTP). The refresh
+  // token is obtained via the in-app "Connect Gmail" OAuth flow and stored in DB.
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || ''
   },
 
   databaseUrl: process.env.DATABASE_URL || '',

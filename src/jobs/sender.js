@@ -88,7 +88,7 @@ async function processFollowups(leads, type, budget, seen) {
     if (isDry()) {
       log(`[DRY] FU(${type}) -> ${lead.email} (${lead.name})`);
     } else {
-      await email.send({ to: lead.email, subject: `Quick question about ${lead.name}`, html: tmpl.html, inReplyTo: lead.message_id });
+      await email.send({ to: lead.email, subject: `Quick question about ${lead.name}`, html: tmpl.html, inReplyTo: lead.message_id, threadId: lead.thread_id });
       const fields = isFU2
         ? { outreach: S.fu2Sent, fu2_date: t.todayStamp() }
         : { outreach: S.fu1Sent, fu1_date: t.todayStamp() };
@@ -125,9 +125,9 @@ async function processNew(leads, budget, seen) {
     if (isDry()) {
       log(`[DRY] NEW -> ${lead.email} (${lead.name}) | subj: ${tmpl.subject}`);
     } else {
-      const messageId = await email.send({ to: lead.email, subject: tmpl.subject, html: tmpl.html });
+      const sent = await email.send({ to: lead.email, subject: tmpl.subject, html: tmpl.html });
       await db.updateLead(lead.id, {
-        outreach: S.emailSent, initial_date: t.todayStamp(), grp: dateLabel, message_id: messageId || ''
+        outreach: S.emailSent, initial_date: t.todayStamp(), grp: dateLabel, message_id: sent.messageId || '', thread_id: sent.threadId || ''
       });
       await db.logEvent(lead.id, 'initial');
     }
@@ -205,7 +205,7 @@ async function sendOne(leadId) {
     const tmpl = templates.initial(lead);
     const messageId = await email.send({ to: lead.email, subject: tmpl.subject, html: tmpl.html });
     await db.updateLead(lead.id, {
-      outreach: S.emailSent, initial_date: t.todayStamp(), grp: t.dayMonthLabel(), message_id: messageId || ''
+      outreach: S.emailSent, initial_date: t.todayStamp(), grp: t.dayMonthLabel(), message_id: sent.messageId || '', thread_id: sent.threadId || ''
     });
     await db.logEvent(lead.id, 'initial');
   } else {
