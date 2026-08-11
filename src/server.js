@@ -7,7 +7,27 @@ const db = require('./db');
 const criteria = require('./criteria');
 const email = require('./email');
 const templates = require('./templates');
+const { screenReason } = require('./guards');
 const t = require('./time');
+
+function appList(l) {
+  try { const a = JSON.parse(l.apps_json || '[]'); return Array.isArray(a) ? a.filter(Boolean) : []; }
+  catch (e) { return []; }
+}
+function appBadge(l) {
+  const a = appList(l);
+  return a.length > 1 ? ` <span class="badge" title="${a.map((x) => x).join(', ').replace(/"/g, '')}">×${a.length}</span>` : '';
+}
+
+// Heuristic "not relevant" flag for an existing lead (guard firewall + oversize).
+function flagReason(lead, crit) {
+  const g = screenReason({ name: lead.name, email: lead.email, notes: '', topApp: lead.top_app, topAppCategory: lead.category });
+  if (g) return g;
+  if (Number(lead.revenue_month) > crit.revenueMax) return 'revenue_too_high';
+  if (crit.installsMax && Number(lead.installs_month) > crit.installsMax * 3) return 'installs_way_over_band';
+  if (crit.maxPriority && Number(lead.priority) > crit.maxPriority) return 'too_big (priority ' + Number(lead.priority).toLocaleString('en-US') + ')';
+  return '';
+}
 
 const { runSender, sendOne, dailyQuota } = require('./jobs/sender');
 const { runReplyWatcher } = require('./jobs/replywatcher');
@@ -94,6 +114,7 @@ function shell(inner) {
   @media (prefers-color-scheme:dark){.live{background:#3b1414;color:#fca5a5}.dry{background:#0c2a3a;color:#7dd3fc}.auto{background:#0f2a17;color:#86efac}.manual{background:#2a2109;color:#fcd34d}.paused{background:#242832;color:#cbd5e1}}
   .seg{display:inline-flex;gap:.25rem}
   .seg button{padding:.4rem .55rem}
+  .badge{display:inline-block;padding:0 .4rem;border-radius:999px;background:var(--chip);color:var(--accent);font-size:.72rem;font-weight:600}
   .toolbar{margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap}
   button{font:inherit;padding:.4rem .7rem;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;transition:.15s}
   button:hover{background:var(--hover)}
@@ -183,7 +204,7 @@ function makeApp() {
 
       const rows = shown.slice(0, 500).map((l) => `<tr>
         <td title="${esc(l.name)}"><b>${esc(l.name)}</b></td>
-        <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}</td>
+        <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}${appBadge(l)}</td>
         <td class="muted">${esc(l.category)}</td>
         <td class="num">${num(l.installs_day)}</td>
         <td class="num">${num(l.installs_month)}</td>
@@ -234,7 +255,8 @@ function makeApp() {
             <form method="post" action="/run/watch"><button title="Scan the inbox now for replies and bounces and update lead statuses">Check replies</button></form>
             <span class="seg">${modeCtl}</span>
             <form method="post" action="/test-email"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
-            <form method="post" action="/admin/dedupe" onsubmit="return confirm('Find and remove duplicate leads (same email)? Keeps one per email.')"><button title="Find & remove duplicate leads by email">🔁 Dedupe</button></form>
+            <form method="get" action="/duplicates"><button title="Review & merge duplicate leads (same email) — combine their apps into one">🔁 Duplicates</button></form>
+            <form method="get" action="/audit"><button title="Find possibly-irrelevant leads (giants, junk) to review and block">🔎 Audit</button></form>
             <form method="post" action="/admin/clear" onsubmit="return confirm('Delete ALL leads and events? This cannot be undone.')"><button title="Delete all leads to start fresh">🗑 Clear</button></form>
           </div>
         </header>
@@ -276,6 +298,7 @@ function makeApp() {
               <label>Installs / month — max<input name="installsMax" value="${esc(crit.installsMax)}"></label>
               <label>Min apps per studio<input name="minApps" value="${esc(crit.minApps)}"></label>
               <label>Max revenue / month ($)<input name="revenueMax" value="${esc(crit.revenueMax)}"></label>
+              <label>Flag giants above priority<input name="maxPriority" value="${esc(crit.maxPriority)}"></label>
               <label>Pages per category<input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
               <label>Source target (studios)<input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
             </div>
@@ -453,6 +476,72 @@ function makeApp() {
       }
       return back(res, '⚠️ Connected but Google returned no refresh token. Set the OAuth app to “In production” in Google Cloud, then Connect Gmail again.');
     } catch (e) { return back(res, 'Gmail connect failed: ' + e.message); }
+  });
+
+  // ---- Duplicate review + merge ----
+  app.get('/duplicates', async (req, res) => {
+    try {
+      const groups = await db.duplicateGroups();
+      if (!groups.length) return res.send(shell('<p><a href="/">← Back to list</a></p><div class="banner">No duplicate leads (same email) found. 🎉</div>'));
+      const blocks = groups.map((g) => {
+        const rows = g.rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.top_app)}</td><td class="num">${num(r.priority)}</td><td>${esc(r.outreach || '—')}</td></tr>`).join('');
+        return `<div class="card" style="padding:.8rem 1rem;margin:.6rem 0">
+          <div style="margin-bottom:.4rem"><b>${esc(g.email)}</b> — ${g.rows.length} rows</div>
+          <div class="wrap"><table><thead><tr><th>Studio</th><th>App</th><th>Priority</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>
+          <p style="margin:.6rem 0 0">
+            <form method="post" action="/duplicates/merge" style="display:inline"><input type="hidden" name="email" value="${esc(g.email)}"><button class="primary" title="Keep one lead and list all their apps in it">Merge (keep 1, list all apps)</button></form>
+            <form method="post" action="/duplicates/delete" style="display:inline"><input type="hidden" name="email" value="${esc(g.email)}"><button title="Keep the first, delete the rest">Delete extras</button></form>
+          </p></div>`;
+      }).join('');
+      res.send(shell(`<p><a href="/">← Back to list</a></p>
+        <h1 style="font-size:1.2rem">Duplicate leads — review (${groups.length} group${groups.length === 1 ? '' : 's'})</h1>
+        <p class="legend">Same email address appears more than once. <b>Merge</b> keeps one lead and combines all their apps into it (so you send one email covering all apps). <b>Delete extras</b> just removes the duplicates.</p>
+        <p>
+          <form method="post" action="/duplicates/merge-all" onsubmit="return confirm('Merge ALL duplicate groups?')" style="display:inline"><button class="primary">Merge all groups</button></form>
+          <form method="post" action="/admin/dedupe" onsubmit="return confirm('Delete extras in ALL groups?')" style="display:inline"><button>Delete all extras</button></form>
+        </p>
+        ${blocks}`));
+    } catch (e) { res.status(500).send('Error: ' + esc(e.message)); }
+  });
+  app.post('/duplicates/merge', async (req, res) => { try { await db.mergeByEmail(req.body.email); } catch (e) { console.error(e); } res.redirect('/duplicates'); });
+  app.post('/duplicates/delete', async (req, res) => { try { await db.deleteExtrasByEmail(req.body.email); } catch (e) { console.error(e); } res.redirect('/duplicates'); });
+  app.post('/duplicates/merge-all', async (req, res) => {
+    try { const r = await db.mergeAllDuplicates(); return back(res, `🔁 Merged ${r.groups} group(s), removed ${r.removed} duplicate row(s).`); }
+    catch (e) { return back(res, '⚠️ Merge failed: ' + e.message); }
+  });
+
+  // ---- Audit: find possibly-irrelevant leads ----
+  app.get('/audit', async (req, res) => {
+    try {
+      const crit = await criteria.get();
+      const leads = await db.allLeads();
+      const flagged = leads.filter((l) => l.grp !== config.groups.blockList)
+        .map((l) => ({ l, reason: flagReason(l, crit) })).filter((x) => x.reason);
+      if (!flagged.length) return res.send(shell('<p><a href="/">← Back to list</a></p><div class="banner">The audit found no likely-irrelevant leads. 🎉</div>'));
+      const rows = flagged.map(({ l, reason }) => `<tr>
+        <td><b>${esc(l.name)}</b></td><td>${esc(l.top_app)}</td><td class="num">${num(l.priority)}</td>
+        <td>${esc(l.email)}</td><td style="color:#b91c1c">${esc(reason)}</td>
+        <td style="white-space:nowrap">
+          <form method="post" action="/action/${l.id}/block" style="display:inline"><button>⛔ Block</button></form>
+          <form method="post" action="/action/${l.id}/delete" onsubmit="return confirm('Delete this lead?')" style="display:inline"><button>🗑</button></form>
+        </td></tr>`).join('');
+      res.send(shell(`<p><a href="/">← Back to list</a></p>
+        <h1 style="font-size:1.2rem">Audit — possibly-irrelevant leads (${flagged.length})</h1>
+        <p class="legend">Flagged by: the guard firewall (China / junk email / brand / top-app), revenue over the cap, installs far over the band, or priority above ${num(crit.maxPriority)} (giants like Google/Samsung). Review and Block/Delete as you judge. Tune the threshold in “Search criteria → Flag giants above priority”.</p>
+        <p><form method="post" action="/audit/block-all" onsubmit="return confirm('Block ALL ${flagged.length} flagged leads?')"><button class="primary">⛔ Block all flagged</button></form></p>
+        <div class="card wrap"><table><thead><tr><th>Studio</th><th>App</th><th>Priority</th><th>Email</th><th>Reason</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`));
+    } catch (e) { res.status(500).send('Error: ' + esc(e.message)); }
+  });
+  app.post('/audit/block-all', async (req, res) => {
+    try {
+      const crit = await criteria.get();
+      const leads = await db.allLeads();
+      let n = 0;
+      for (const l of leads) {
+        if (l.grp !== config.groups.blockList && flagReason(l, crit)) { await db.updateLead(l.id, { grp: config.groups.blockList }); n++; }
+      }
+      return back(res, `⛔ Blocked ${n} flagged lead(s).`);
+    } catch (e) { return back(res, '⚠️ Block-all failed: ' + e.message); }
   });
 
   app.post('/run/refill', (req, res) => {

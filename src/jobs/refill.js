@@ -62,7 +62,8 @@ async function runPoolRefill(force) {
           const appRow = ass.mapAppRow(raw);
           if (!appRow.devId) { bump('no_developer_id'); continue; }
           const devKey = 'dev:' + appRow.devId;
-          if (index.has(devKey)) continue;
+          // Same developer seen again this run → add this app to their lead's list.
+          if (index.has(devKey)) { await db.appendApp('dev', appRow.devId, appRow.appName); continue; }
           index.add(devKey);
           if (/\bpublish(er|ing)?\b/i.test(appRow.devName)) { bump('publisher'); continue; }
 
@@ -82,7 +83,8 @@ async function runPoolRefill(force) {
             category: cand.topAppCategory, installsDay: cand.installsPerDay,
             installsMonth: cand.installsPerMonth, revenueMonth: cand.revenuePerMonth, appsCount: cand.appsCount
           });
-          if (!newId) { bump('duplicate_email'); continue; }
+          // Email already exists from a previous run → add this app to it.
+          if (!newId) { await db.appendApp('email', cand.email, cand.topApp); bump('merged_into_existing'); continue; }
           log(`add "${cand.devName}" <${cand.email}> prio=${cand.priority} top="${cand.topApp}"`);
           index.add(dedupKey(cand.devName, cand.email));
           index.add('email:' + cand.email.toLowerCase());

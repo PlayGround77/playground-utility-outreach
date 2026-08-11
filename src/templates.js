@@ -9,6 +9,22 @@ function latinTopApp(topApp) {
   return t;
 }
 
+// The studio's app names (from the merged apps_json list; falls back to top_app).
+function appNames(lead) {
+  let list = [];
+  try { list = JSON.parse(lead.apps_json || '[]'); } catch (e) { list = []; }
+  if (!Array.isArray(list)) list = [];
+  list = list.map((a) => latinTopApp(a)).filter(Boolean);
+  if (!list.length) { const t = latinTopApp(lead.top_app); if (t) list = [t]; }
+  return list;
+}
+function appPhrase(names) {
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  if (names.length === 3) return `${names[0]}, ${names[1]} and ${names[2]}`;
+  return `${names[0]}, ${names[1]} and ${names.length - 2} more`;
+}
+
 function real(v) {
   return v && String(v).indexOf('<<') === -1 && String(v).trim() !== '' ? String(v).trim() : '';
 }
@@ -29,10 +45,12 @@ function signature() {
 
 function initial(lead) {
   const studio = lead.name;
-  const app = latinTopApp(lead.top_app);
-  const opener = app
-    ? `I came across ${studio} and really liked what you've built with ${app}.`
-    : `I came across ${studio} and really liked your portfolio of utility apps.`;
+  const names = appNames(lead);
+  const opener = names.length > 1
+    ? `I came across ${studio} and really liked what you've built — apps like ${appPhrase(names)}.`
+    : names.length === 1
+      ? `I came across ${studio} and really liked what you've built with ${names[0]}.`
+      : `I came across ${studio} and really liked your portfolio of utility apps.`;
   const html =
     `Hi ${studio} team,<br><br>` +
     `${opener}<br><br>` +
@@ -55,8 +73,12 @@ function fu1(lead) {
 }
 
 function fu2(lead) {
-  const app = latinTopApp(lead.top_app);
-  const ref = app ? `I still think ${app} shows real promise.` : 'I still think your apps show real promise.';
+  const names = appNames(lead);
+  const ref = names.length > 1
+    ? `I still think your apps (${appPhrase(names)}) show real promise.`
+    : names.length === 1
+      ? `I still think ${names[0]} shows real promise.`
+      : 'I still think your apps show real promise.';
   const html =
     `Hi ${lead.name} team,<br><br>` +
     `I'll close the loop here so I'm not cluttering your inbox. ${ref}<br><br>` +

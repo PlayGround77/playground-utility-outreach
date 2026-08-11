@@ -31,6 +31,7 @@ async function init() {
       notes         TEXT NOT NULL DEFAULT '',
       store_link    TEXT NOT NULL DEFAULT '',
       top_app       TEXT NOT NULL DEFAULT '',
+      apps_json     TEXT NOT NULL DEFAULT '',
       category      TEXT NOT NULL DEFAULT '',
       installs_day  BIGINT NOT NULL DEFAULT 0,
       installs_month BIGINT NOT NULL DEFAULT 0,
@@ -51,7 +52,8 @@ async function init() {
     'installs_month BIGINT NOT NULL DEFAULT 0',
     'revenue_month BIGINT NOT NULL DEFAULT 0',
     'apps_count INTEGER NOT NULL DEFAULT 0',
-    "thread_id TEXT NOT NULL DEFAULT ''"
+    "thread_id TEXT NOT NULL DEFAULT ''",
+    "apps_json TEXT NOT NULL DEFAULT ''"
   ]) {
     await q(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ${col};`);
   }
@@ -81,18 +83,89 @@ async function allLeads() {
 // (DB-level duplicate prevention, independent of the in-memory dedup index).
 // Returns the new id, or null if it was a duplicate.
 async function insertLead(lead) {
+  const appsJson = JSON.stringify(lead.topApp ? [lead.topApp] : []);
   const r = await q(
     `INSERT INTO leads
-       (name,email,priority,top_app,store_link,grp,developer_id,
+       (name,email,priority,top_app,apps_json,store_link,grp,developer_id,
         category,installs_day,installs_month,revenue_month,apps_count)
-     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
      WHERE $2 = '' OR NOT EXISTS (SELECT 1 FROM leads WHERE email <> '' AND lower(email) = lower($2))
      RETURNING id`,
-    [lead.name, lead.email, lead.priority || 0, lead.topApp || '', lead.storeLink || '',
+    [lead.name, lead.email, lead.priority || 0, lead.topApp || '', appsJson, lead.storeLink || '',
       lead.grp || '', lead.developerId || '', lead.category || '',
       lead.installsDay || 0, lead.installsMonth || 0, lead.revenueMonth || 0, lead.appsCount || 0]
   );
   return r.rows.length ? r.rows[0].id : null;
+}
+
+// Append an app name to the app list of the matching lead (by 'dev' or 'email').
+// matchCol is code-controlled (never user input). Returns true if a lead matched.
+async function appendApp(matchCol, matchVal, appName) {
+  const where = matchCol === 'email' ? 'lower(email) = lower($1)' : 'developer_id = $1';
+  const r = await q(`SELECT id, apps_json, top_app FROM leads WHERE ${where} ORDER BY id ASC LIMIT 1`, [matchVal]);
+  if (!r.rows.length) return false;
+  const row = r.rows[0];
+  let list = [];
+  try { list = JSON.parse(row.apps_json || '[]'); if (!Array.isArray(list)) list = []; } catch (e) { list = []; }
+  if (!list.length && row.top_app) list = [row.top_app];
+  if (appName && !list.includes(appName)) list.push(appName);
+  await q('UPDATE leads SET apps_json = $1, updated_at = now() WHERE id = $2', [JSON.stringify(list), row.id]);
+  return true;
+}
+
+// Groups of leads sharing an email (only groups with >1 row).
+async function duplicateGroups() {
+  const r = await q("SELECT * FROM leads WHERE email <> '' ORDER BY lower(email), id");
+  const map = new Map();
+  for (const row of r.rows) {
+    const k = (row.email || '').toLowerCase();
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(row);
+  }
+  const groups = [];
+  for (const [email, rows] of map) if (rows.length > 1) groups.push({ email, rows });
+  return groups;
+}
+
+// Merge all leads sharing an email into one: keep the most-advanced row, union
+// their app lists, take the max priority, delete the rest.
+async function mergeByEmail(email) {
+  const r = await q(
+    `SELECT * FROM leads WHERE lower(email) = lower($1)
+     ORDER BY (outreach <> '') DESC, (message_id <> '') DESC, id ASC`, [email]);
+  if (r.rows.length < 2) return { kept: r.rows[0] && r.rows[0].id, removed: 0, appsCount: 0 };
+  const primary = r.rows[0];
+  const apps = new Set();
+  for (const row of r.rows) {
+    let list = [];
+    try { list = JSON.parse(row.apps_json || '[]'); } catch (e) { list = []; }
+    (Array.isArray(list) ? list : []).forEach((a) => { if (a) apps.add(a); });
+    if (row.top_app) apps.add(row.top_app);
+  }
+  const appsArr = Array.from(apps);
+  const maxPriority = Math.max.apply(null, r.rows.map((x) => Number(x.priority) || 0));
+  await q('UPDATE leads SET apps_json = $1, priority = $2, updated_at = now() WHERE id = $3',
+    [JSON.stringify(appsArr), maxPriority, primary.id]);
+  const removeIds = r.rows.slice(1).map((x) => x.id);
+  await q('DELETE FROM leads WHERE id = ANY($1)', [removeIds]);
+  return { kept: primary.id, removed: removeIds.length, appsCount: appsArr.length };
+}
+
+// Delete the extra rows of an email group without merging apps (keep primary).
+async function deleteExtrasByEmail(email) {
+  const r = await q(
+    `SELECT id FROM leads WHERE lower(email) = lower($1)
+     ORDER BY (outreach <> '') DESC, (message_id <> '') DESC, id ASC`, [email]);
+  const removeIds = r.rows.slice(1).map((x) => x.id);
+  if (removeIds.length) await q('DELETE FROM leads WHERE id = ANY($1)', [removeIds]);
+  return removeIds.length;
+}
+
+async function mergeAllDuplicates() {
+  const groups = await duplicateGroups();
+  let removed = 0;
+  for (const g of groups) { const res = await mergeByEmail(g.email); removed += res.removed; }
+  return { groups: groups.length, removed };
 }
 
 // Count duplicate leads (extra rows sharing an email).
@@ -193,6 +266,7 @@ async function setSetting(key, value) {
 
 module.exports = {
   pool, q, init, allLeads, insertLead, updateLead, dedupIndex, clearLeads, deleteLead,
-  countDuplicates, removeDuplicates,
+  countDuplicates, removeDuplicates, appendApp, duplicateGroups, mergeByEmail,
+  deleteExtrasByEmail, mergeAllDuplicates,
   countSendable, logEvent, countToday, getSetting, setSetting, config
 };
