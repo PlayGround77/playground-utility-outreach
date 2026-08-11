@@ -29,7 +29,12 @@ function defaults() {
     installsMin: config.appStoreSpy.installsBand.minPerMonth,
     installsMax: config.appStoreSpy.installsBand.maxPerMonth,
     minApps: config.appStoreSpy.minAppsCount,
-    minRating: Number(process.env.MIN_RATING) || 0, // 0 = any; e.g. 4 = only apps rated ≥ 4.0
+    // ---- acquisition funnel ----
+    installsTotalMin: Number(process.env.INSTALLS_TOTAL_MIN) || 10000,   // all-time installs sweet spot
+    installsTotalMax: Number(process.env.INSTALLS_TOTAL_MAX) || 500000,
+    minRating: Number(process.env.MIN_RATING) || 4.3,                    // proven quality
+    minRatingCount: Number(process.env.MIN_RATING_COUNT) || 50,          // reliable rating
+    maxApps: Number(process.env.MAX_APPS_PER_DEV) || 40,                 // avoid giant farms
     revenueMax: config.appStoreSpy.revenueMaxPerMonth,
     maxPriority: Number(process.env.MAX_PRIORITY) || 100000000, // flag giants above this (priority = ipd × apps)
     pagesPerCategory: config.appStoreSpy.pagesPerCategory,
@@ -54,7 +59,7 @@ function sanitize(input, base) {
       .filter((c) => VALID_CATEGORIES.includes(c));
     if (list.length) out.categories = Array.from(new Set(list));
   }
-  for (const f of ['installsMin', 'installsMax', 'minApps', 'minRating', 'revenueMax', 'maxPriority', 'pagesPerCategory', 'refillTarget']) {
+  for (const f of ['installsMin', 'installsMax', 'minApps', 'installsTotalMin', 'installsTotalMax', 'minRating', 'minRatingCount', 'maxApps', 'revenueMax', 'maxPriority', 'pagesPerCategory', 'refillTarget']) {
     if (input[f] !== undefined && input[f] !== '') {
       const n = Number(input[f]);
       if (Number.isFinite(n)) out[f] = n;
@@ -64,6 +69,10 @@ function sanitize(input, base) {
   out.installsMax = Math.max(out.installsMin + 1, Math.round(out.installsMax));
   out.minApps = Math.max(1, Math.round(out.minApps));
   out.minRating = Math.min(5, Math.max(0, Number(out.minRating) || 0));
+  out.installsTotalMin = Math.max(0, Math.round(out.installsTotalMin));
+  out.installsTotalMax = Math.max(out.installsTotalMin + 1, Math.round(out.installsTotalMax));
+  out.minRatingCount = Math.max(0, Math.round(out.minRatingCount));
+  out.maxApps = Math.max(1, Math.round(out.maxApps));
   out.revenueMax = Math.max(0, Math.round(out.revenueMax));
   out.maxPriority = Math.max(0, Math.round(out.maxPriority));
   out.pagesPerCategory = Math.min(20, Math.max(1, Math.round(out.pagesPerCategory)));

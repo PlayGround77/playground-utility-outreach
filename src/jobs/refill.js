@@ -20,6 +20,7 @@ function screenCandidate(cand, index, crit) {
   // Installs band is enforced at query time (per-app downloads_daily); the stored
   // installs are developer-level totals, so we do NOT re-check the band here.
   if (cand.appsCount < crit.minApps) return 'too_few_apps';
+  if (crit.maxApps && cand.appsCount > crit.maxApps) return 'too_many_apps'; // avoid giant farms
   if (cand.revenuePerMonth > crit.revenueMax) return 'revenue_too_high';
   if (index.has('email:' + cand.email.toLowerCase())) return 'shared_email_farm';
   return screenReason({ name: cand.devName, email: cand.email, notes: '', topApp: cand.topApp, topAppCategory: cand.topAppCategory });
@@ -53,7 +54,7 @@ async function runPoolRefill(force) {
         if (!(await ass.underCallCap())) { log('daily API cap reached'); capHit = true; break; }
 
         let rows;
-        try { rows = await ass.queryApps(category, page, 100, band, crit.minRating); }
+        try { rows = await ass.queryApps(category, page, 100, crit); }
         catch (e) { log(`query ${category} p${page} failed: ${e.message}`); break; }
         if (!rows.length) break;
 
@@ -83,7 +84,10 @@ async function runPoolRefill(force) {
             topApp: cand.topApp, storeLink: cand.storeLink, grp, developerId: cand.devId,
             category: cand.topAppCategory, installsDay: cand.installsPerDay,
             installsMonth: cand.installsPerMonth, revenueMonth: cand.revenuePerMonth, appsCount: cand.appsCount,
-            ratingAvg: cand.ratingAvg, ratingCount: cand.ratingCount
+            ratingAvg: cand.ratingAvg, ratingCount: cand.ratingCount,
+            installsTotal: cand.installsTotal, revPerInstall: cand.revPerInstall,
+            hasIap: cand.hasIap, hasAds: cand.hasAds, website: cand.website,
+            lastUpdate: cand.lastUpdate, opportunity: cand.opportunity
           });
           // Email already exists from a previous run → add this app to it.
           if (!newId) { await db.appendApp('email', cand.email, cand.topApp); bump('merged_into_existing'); continue; }

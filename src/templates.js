@@ -46,28 +46,26 @@ function signature() {
 function initial(lead) {
   const studio = lead.name;
   const names = appNames(lead);
-  const opener = names.length > 1
-    ? `I came across ${studio} and really liked what you've built — apps like ${appPhrase(names)}.`
-    : names.length === 1
-      ? `I came across ${studio} and really liked what you've built with ${names[0]}.`
-      : `I came across ${studio} and really liked your portfolio of utility apps.`;
+  const lead_app = names.length ? names[0] : 'your app';
+  const appRef = names.length > 1 ? `your apps (${appPhrase(names)})` : lead_app;
   const html =
     `Hi ${studio} team,<br><br>` +
-    `${opener}<br><br>` +
-    `I'm ${config.brand.ownerName} from ${config.brand.companyName}, where we publish mobile ` +
-    `utility apps. We partner with studios building high-retention utility apps that have strong ` +
-    `monetization potential, and I think ${studio} could be a great fit.<br><br>` +
-    `Would you be open to a quick 15-minute call to explore working together?` +
+    `I came across ${lead_app} and was genuinely impressed with what you've built.<br><br>` +
+    `I'm ${config.brand.ownerName} from ${config.brand.companyName} — we acquire and grow mobile ` +
+    `apps. I think ${appRef} has real potential, and I'd love to explore a possible acquisition.<br><br>` +
+    `Would you be open to a quick 15-minute chat to see if there's a fit?` +
     signature();
-  return { subject: `Quick question about ${studio}`, html };
+  return { subject: `Interested in ${names.length ? lead_app : studio}`, html };
 }
 
 function fu1(lead) {
+  const names = appNames(lead);
+  const lead_app = names.length ? names[0] : 'your app';
   const html =
     `Hi ${lead.name} team,<br><br>` +
-    `Just floating this back to the top of your inbox. We're actively signing new utility-app ` +
-    `studios this month, and I'd love to see if there's a fit with ${config.brand.companyName}.<br><br>` +
-    `Any interest in a quick 15-minute call?` +
+    `Just following up — I'm still very interested in exploring an acquisition of ${lead_app}. ` +
+    `We move quickly and make the process simple for founders.<br><br>` +
+    `Would a quick 15-minute call this week work?` +
     signature();
   return { html };
 }
@@ -75,15 +73,13 @@ function fu1(lead) {
 function fu2(lead) {
   const names = appNames(lead);
   const ref = names.length > 1
-    ? `I still think your apps (${appPhrase(names)}) show real promise.`
-    : names.length === 1
-      ? `I still think ${names[0]} shows real promise.`
-      : 'I still think your apps show real promise.';
+    ? `your apps (${appPhrase(names)})`
+    : names.length === 1 ? names[0] : 'your app';
   const html =
     `Hi ${lead.name} team,<br><br>` +
-    `I'll close the loop here so I'm not cluttering your inbox. ${ref}<br><br>` +
-    `If publishing with ${config.brand.companyName} is ever of interest, the door stays open — ` +
-    `just reply and we'll pick it up.` +
+    `I'll close the loop here so I'm not cluttering your inbox. If you'd ever consider selling ` +
+    `${ref} — now or down the road — I'd genuinely love to talk.<br><br>` +
+    `Just reply and we'll pick it up whenever the timing is right.` +
     signature();
   return { html };
 }

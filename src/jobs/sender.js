@@ -107,7 +107,7 @@ async function processNew(leads, budget, seen) {
   const S = config.statuses;
   const candidates = leads
     .filter((l) => !l.outreach && l.email && !blocked(l))
-    .sort((a, b) => Number(b.priority) - Number(a.priority));
+    .sort((a, b) => (Number(b.opportunity) - Number(a.opportunity)) || (Number(b.priority) - Number(a.priority)));
 
   const dateLabel = t.dayMonthLabel();
   let sent = 0;

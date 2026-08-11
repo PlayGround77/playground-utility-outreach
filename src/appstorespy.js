@@ -40,30 +40,34 @@ async function fetchWithBackoff(url, options) {
 }
 
 /**
- * POST /play/apps/query — utility apps (not games) in the installs band.
- * downloads_month is unreliable, so the band is applied to downloads_daily
- * (monthly band / 30). Returns an array of app rows.
+ * POST /play/apps/query — ACQUISITION funnel: proven-demand utility apps in the
+ * all-time installs "sweet spot" with a healthy rating (weak monetization is
+ * scored later per candidate). `crit` supplies installsTotalMin/Max, minRating,
+ * minRatingCount. Returns an array of app rows.
  */
-async function queryApps(category, page, limit, band, minRating) {
+async function queryApps(category, page, limit, crit) {
   await countCall();
-  const b = band || A.installsBand;
-  const dailyMin = Math.max(1, Math.round(b.minPerMonth / 30));
-  const dailyMax = Math.round(b.maxPerMonth / 30);
+  const c = crit || {};
   const filter = {
     published: true,
     category_type: 'APP',
     category,
-    downloads_daily: { gte: dailyMin, lte: dailyMax }
+    downloads_exact: {
+      gte: c.installsTotalMin || 10000,
+      lte: c.installsTotalMax || 500000
+    }
   };
-  if (minRating && minRating > 0) filter.rating_avg = { gte: minRating, lte: 5 };
+  if (c.minRating && c.minRating > 0) filter.rating_avg = { gte: c.minRating, lte: 5 };
+  if (c.minRatingCount && c.minRatingCount > 0) filter.rating_count = { gte: c.minRatingCount };
   const body = {
     limit: limit || 100,
     page: page || 1,
-    sort: '-downloads_daily',
+    sort: '-downloads_daily', // ongoing install velocity = proven, still-alive demand
     country: 'US',
     fields: ['id', 'bundle', 'name', 'category', 'category_type',
       'downloads_daily', 'downloads_exact', 'downloads_mark', 'revenue_month',
-      'rating_avg', 'rating_count', 'developer_name', 'developer_id', 'url_appstorespy'],
+      'rating_avg', 'rating_count', 'iap', 'ads', 'advertised', 'update_date',
+      'developer_name', 'developer_id', 'url_appstorespy'],
     filter: filter
   };
   const res = await fetchWithBackoff(A.apiUrl + A.endpoint, {
@@ -95,13 +99,49 @@ function mapAppRow(row) {
     appCategory: String(row.category || ''),
     appInstallsDaily: dd,
     appInstallsMonth: dd * 30,
+    installsTotal: Number(row.downloads_exact || row.downloads_mark || 0),
     revenueMonth: Number(row.revenue_month || 0),
     ratingAvg: Number(row.rating_avg || 0),
     ratingCount: Number(row.rating_count || 0),
+    hasIap: !!row.iap,
+    hasAds: !!(row.ads || row.advertised),
+    lastUpdate: String(row.update_date || ''),
     storeLink: bundle
       ? 'https://play.google.com/store/apps/details?id=' + bundle
       : String(row.url_appstorespy || '')
   };
+}
+
+const GENERIC_MAIL = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'proton.me', 'protonmail.com'];
+
+/** Acquisition Opportunity Score (0–100): demand × weak-monetization × acquirable. */
+function opportunityScore(appRow, dev, email, revPerInstall) {
+  const domain = (email.split('@')[1] || '').toLowerCase();
+  const website = String(dev.website || '');
+  const totalApps = Number(dev.total_apps || 0);
+  let s = 0;
+
+  // Demand proven (max 40)
+  if (appRow.ratingAvg >= 4.3) s += 15; else if (appRow.ratingAvg >= 4.0) s += 8;
+  s += Math.min(15, Math.round(Math.log10((appRow.ratingCount || 0) + 1) * 5));
+  if (appRow.installsTotal >= 10000 && appRow.installsTotal <= 500000) s += 10;
+
+  // Weak monetization = upside (max 35)
+  if (appRow.revenueMonth === 0) s += 20;
+  else if (revPerInstall < 0.02) s += 15;
+  else if (revPerInstall < 0.05) s += 8;
+  if (!appRow.hasIap) s += 8;
+  if (!appRow.hasAds) s += 7;
+
+  // Cheap / acquirable (max 25)
+  if (GENERIC_MAIL.includes(domain)) s += 10;   // solo/indie signal
+  if (!website) s += 8;
+  if (totalApps > 0 && totalApps <= 10) s += 4;
+  if (appRow.lastUpdate) {
+    const ageDays = (Date.now() - new Date(appRow.lastUpdate + 'T00:00:00Z').getTime()) / 86400000;
+    if (ageDays > 365) s += 3; // not recently heavily updated → likely cheaper
+  }
+  return Math.max(0, Math.min(100, Math.round(s)));
 }
 
 function buildCandidate(appRow, dev) {
@@ -109,6 +149,8 @@ function buildCandidate(appRow, dev) {
   const email = (emails && emails.length) ? String(emails[0]).toLowerCase() : '';
   const totalApps = Number(dev.total_apps || 0);
   const ipd = Number(dev.ipd || 0);
+  const revPerInstall = appRow.appInstallsMonth > 0 ? (appRow.revenueMonth / appRow.appInstallsMonth) : 0;
+  const website = String(dev.website || '');
   return {
     devName: appRow.devName || String(dev.name || ''),
     devId: appRow.devId,
@@ -116,11 +158,18 @@ function buildCandidate(appRow, dev) {
     // Developer-level installs so daily & monthly are consistent (monthly = 30×daily).
     installsPerDay: ipd,
     installsPerMonth: ipd * 30,
+    installsTotal: appRow.installsTotal || 0,
     appsCount: totalApps,
     revenuePerMonth: appRow.revenueMonth || 0,
+    revPerInstall: Math.round(revPerInstall * 10000) / 10000,
     ratingAvg: appRow.ratingAvg || 0,
     ratingCount: appRow.ratingCount || 0,
-    storeLink: appRow.storeLink || String(dev.url || ''),
+    hasIap: appRow.hasIap,
+    hasAds: appRow.hasAds,
+    website: website,
+    lastUpdate: appRow.lastUpdate || '',
+    opportunity: opportunityScore(appRow, dev, email, revPerInstall),
+    storeLink: appRow.storeLink || website || String(dev.url || ''),
     priority: ipd * totalApps,
     topApp: appRow.appName || '',
     topAppCategory: appRow.appCategory || ''

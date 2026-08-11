@@ -205,11 +205,13 @@ function makeApp() {
       const rows = shown.slice(0, 500).map((l) => `<tr>
         <td title="${esc(l.name)}"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></td>
         <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}${appBadge(l)}</td>
+        <td class="num"><b style="color:${l.opportunity >= 70 ? '#059669' : l.opportunity >= 45 ? '#b45309' : 'inherit'}">${num(l.opportunity)}</b></td>
         <td class="muted">${esc(l.category)}</td>
         <td class="num">${num(l.installs_day)}</td>
-        <td class="num">${num(l.installs_month)}</td>
+        <td class="num">${num(l.installs_total)}</td>
         <td class="num">${num(l.apps_count)}</td>
         <td class="num">$${num(l.revenue_month)}</td>
+        <td class="num">${Number(l.rev_per_install) ? '$' + Number(l.rev_per_install).toFixed(3) : '$0'}</td>
         <td class="num">${Number(l.rating_avg) ? '★' + Number(l.rating_avg).toFixed(1) + ' <span class="muted">(' + num(l.rating_count) + ')</span>' : ''}</td>
         <td class="num">${num(l.priority)}</td>
         <td class="ell" title="${esc(l.email)}">${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''}</td>
@@ -295,14 +297,16 @@ function makeApp() {
             <label>Categories (comma-separated Google Play APP categories)
               <input name="categories" value="${esc(crit.categories.join(','))}"></label>
             <div class="grid">
-              <label>Installs / month — min<input name="installsMin" value="${esc(crit.installsMin)}"></label>
-              <label>Installs / month — max<input name="installsMax" value="${esc(crit.installsMax)}"></label>
-              <label>Min apps per studio<input name="minApps" value="${esc(crit.minApps)}"></label>
-              <label>Min rating (0–5, 0 = any)<input name="minRating" value="${esc(crit.minRating)}"></label>
+              <label>All-time installs — min<input name="installsTotalMin" value="${esc(crit.installsTotalMin)}"></label>
+              <label>All-time installs — max<input name="installsTotalMax" value="${esc(crit.installsTotalMax)}"></label>
+              <label>Min rating (0–5)<input name="minRating" value="${esc(crit.minRating)}"></label>
+              <label>Min # of ratings<input name="minRatingCount" value="${esc(crit.minRatingCount)}"></label>
+              <label>Min apps per dev<input name="minApps" value="${esc(crit.minApps)}"></label>
+              <label>Max apps per dev (avoid farms)<input name="maxApps" value="${esc(crit.maxApps)}"></label>
               <label>Max revenue / month ($)<input name="revenueMax" value="${esc(crit.revenueMax)}"></label>
               <label>Flag giants above priority<input name="maxPriority" value="${esc(crit.maxPriority)}"></label>
               <label>Pages per category<input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
-              <label>Source target (studios)<input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
+              <label>Source target (apps)<input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
             </div>
             <button class="primary" title="Save these search criteria to the database; they take effect on the next “Source now” and scheduled refill">Save criteria</button>
             <span class="muted" style="font-size:.78rem">Valid: ${criteria.VALID_CATEGORIES.join(', ')}</span>
@@ -327,8 +331,8 @@ function makeApp() {
         <p class="legend">The <b>Studio</b> and <b>Actions</b> columns stay pinned; scroll the table sideways for status &amp; details.</p>
         <div class="card wrap"><table>
           <thead><tr>
-            <th>Studio</th><th>App</th><th>Category</th><th>Inst/day</th><th>Inst/mo</th>
-            <th>Apps</th><th>Rev/mo</th><th>Rating</th><th>Priority</th><th>Email</th><th>Store</th>
+            <th>Studio</th><th>App</th><th title="Acquisition Opportunity Score 0–100">Opp</th><th>Category</th><th>Inst/day</th><th>Total inst</th>
+            <th>Apps</th><th>Rev/mo</th><th>$/inst</th><th>Rating</th><th>Priority</th><th>Email</th><th>Store</th>
             <th>Outreach status</th><th>Response status</th><th>Group</th><th></th>
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="14" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
