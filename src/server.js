@@ -227,6 +227,11 @@ function makeApp() {
     await db.updateLead(Number(req.params.id), { grp: config.groups.blockList });
     res.redirect('/');
   });
+  // Legacy alias so a stale/cached page (old 📞/🚫 buttons) still works.
+  app.post('/action/:id/respond', async (req, res) => {
+    await db.updateLead(Number(req.params.id), { response: String(req.body.value || '') });
+    res.redirect('/');
+  });
   app.post('/criteria', async (req, res) => {
     try { await criteria.set(req.body || {}); } catch (e) { console.error('[criteria]', e.message); }
     res.redirect('/');
