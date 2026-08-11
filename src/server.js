@@ -6,6 +6,7 @@ const config = require('./config');
 const db = require('./db');
 const criteria = require('./criteria');
 const email = require('./email');
+const templates = require('./templates');
 const t = require('./time');
 
 const { runSender, sendOne, dailyQuota } = require('./jobs/sender');
@@ -183,6 +184,7 @@ function makeApp() {
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
         <td class="muted">${esc(l.grp)}</td>
         <td style="white-space:nowrap">
+          <form method="get" action="/preview/${l.id}"><button title="See the exact email that will be sent to this lead">👁 Preview</button></form>
           <form method="post" action="/action/${l.id}/send" onsubmit="return confirm('Send the next email in the sequence to this lead now?')"><button class="send" title="Send the next email (initial → FU1 → FU2) to THIS lead now. Respects DRY_RUN.">✉ Send</button></form>
           <form method="post" action="/action/${l.id}/block"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form>
         </td>
@@ -324,6 +326,41 @@ function makeApp() {
     res.redirect('/');
   });
   const back = (res, m) => res.redirect('/?msg=' + encodeURIComponent(m));
+
+  // Preview the exact email that would be sent next to a lead.
+  app.get('/preview/:id', async (req, res) => {
+    try {
+      const leads = await db.allLeads();
+      const lead = leads.find((l) => String(l.id) === String(req.params.id));
+      if (!lead) return res.status(404).send('Lead not found');
+      const S = config.statuses;
+      let step, subject, html;
+      if (!lead.outreach) { step = 'Initial'; const tp = templates.initial(lead); subject = tp.subject; html = tp.html; }
+      else if (lead.outreach === S.emailSent) { step = 'Follow-up 1'; subject = 'Re: Quick question about ' + lead.name; html = templates.fu1(lead).html; }
+      else if (lead.outreach === S.fu1Sent) { step = 'Follow-up 2'; subject = 'Re: Quick question about ' + lead.name; html = templates.fu2(lead).html; }
+      else { step = 'Done'; }
+
+      if (step === 'Done') {
+        return res.send(shell(`<p><a href="/">← Back</a></p><div class="banner">Sequence is complete for <b>${esc(lead.name)}</b> — no further email will be sent.</div>`));
+      }
+      res.send(shell(`
+        <p><a href="/">← Back to list</a></p>
+        <h1 style="font-size:1.2rem">Email preview — ${esc(lead.name)}</h1>
+        <div class="card" style="padding:1rem;max-width:760px">
+          <div><b>To:</b> ${esc(lead.email)}</div>
+          <div><b>Next step:</b> ${esc(step)}</div>
+          <div><b>Subject:</b> ${esc(subject)}</div>
+          <hr style="border:none;border-top:1px solid var(--line);margin:.8rem 0">
+          <div style="line-height:1.6">${html}</div>
+        </div>
+        <p style="margin-top:1rem">
+          <form method="post" action="/action/${lead.id}/send" onsubmit="return confirm('Send this email now?')"><button class="send" title="Send this exact email now (respects DRY_RUN)">✉ Send this now</button></form>
+          <a href="/" style="margin-left:.6rem">Cancel</a>
+        </p>
+        <p class="legend">This is exactly what the recipient will receive${config.DRY_RUN ? ' — but DRY_RUN is on, so “Send this now” only simulates.' : '.'}</p>
+      `));
+    } catch (e) { res.status(500).send('Error: ' + esc(e.message)); }
+  });
 
   // Manual per-lead send: sends the next email in the sequence to one lead.
   app.post('/action/:id/send', async (req, res) => {
