@@ -5,6 +5,7 @@ const db = require('../db');
 const ass = require('../appstorespy');
 const email = require('../email');
 const criteria = require('../criteria');
+const liveMode = require('../livemode');
 const { screenReason } = require('../guards');
 const t = require('../time');
 
@@ -120,7 +121,7 @@ async function runPoolRefill(force) {
   const rejectLines = Object.keys(rejects).sort().map((k) => `  ${k}: ${rejects[k]}`).join('\n') || '  (none)';
   const body = `${config.brand.companyName} Utility Pool Refill\n\nAdded: ${added}\nScreened: ${screened}\n\nRejections:\n${rejectLines}\n`;
   log(`done: +${added} (screened ${screened})`);
-  if (!config.DRY_RUN && config.report.summaryTo) {
+  if (!(await liveMode.isDry()) && config.report.summaryTo) {
     try { await email.notify(config.report.summaryTo, `📥 Pool Refill: ${added} studios`, body); } catch (e) { log('summary email failed: ' + e.message); }
   } else {
     log('summary:\n' + body);

@@ -2,6 +2,7 @@
 
 const config = require('./config');
 const db = require('./db');
+const liveMode = require('./livemode');
 const { makeApp } = require('./server');
 const scheduler = require('./scheduler');
 
@@ -15,8 +16,9 @@ async function main() {
 
   scheduler.start();
 
-  console.log(`[boot] ${config.brand.companyName} Utility Outreach up. DRY_RUN=${config.DRY_RUN}.`);
-  if (config.DRY_RUN) console.log('[boot] DRY_RUN is ON — no email is sent and no leads are written by the sender.');
+  const dry = await liveMode.isDry();
+  console.log(`[boot] ${config.brand.companyName} Utility Outreach up. dry=${dry} (toggle from the dashboard, or set DRY_RUN in Railway as the first-boot default).`);
+  if (dry) console.log('[boot] Dry mode is ON — no email is sent.');
 }
 
 main().catch((e) => { console.error('[fatal]', e); process.exit(1); });

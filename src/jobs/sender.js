@@ -5,9 +5,9 @@ const db = require('../db');
 const email = require('../email');
 const templates = require('../templates');
 const { screenReason } = require('../guards');
+const liveMode = require('../livemode');
 const t = require('../time');
 
-function isDry() { return config.DRY_RUN === true; }
 function log(m) { console.log('[sender] ' + m); }
 
 function dailyQuota() {
@@ -28,8 +28,8 @@ function remainingRunsToday() {
   return Math.max(1, Math.ceil(minsLeft / 15));
 }
 
-function jitter() {
-  if (isDry()) return Promise.resolve();
+function jitter(dry) {
+  if (dry) return Promise.resolve();
   const { jitterMinSec: lo, jitterMaxSec: hi } = config.sender;
   return t.sleep((lo + Math.floor(Math.random() * (hi - lo + 1))) * 1000);
 }
@@ -46,12 +46,12 @@ async function alreadyEmailed(emailAddr) {
   return r.rows.length > 0;
 }
 
-async function closeSweep(leads) {
+async function closeSweep(leads, dry) {
   const S = config.statuses, R = config.responses;
   for (const lead of leads) {
     if (lead.outreach === S.fu2Sent && !lead.response &&
         t.daysBetween(dateStr(lead.fu2_date), t.todayStamp()) >= config.sender.closeAfterDays) {
-      if (!isDry()) {
+      if (!dry) {
         await db.updateLead(lead.id, { outreach: S.sequenceClosed, response: R.noResponse });
         await db.logEvent(lead.id, 'close');
       }
@@ -66,7 +66,7 @@ function dateStr(d) {
   return String(d).slice(0, 10);
 }
 
-async function processFollowups(leads, type, budget, seen) {
+async function processFollowups(leads, type, budget, seen, dry) {
   if (budget <= 0) return 0;
   const S = config.statuses;
   const isFU2 = type === 'fu2';
@@ -85,7 +85,7 @@ async function processFollowups(leads, type, budget, seen) {
     seen.add(lead.email.toLowerCase());
 
     const tmpl = isFU2 ? templates.fu2(lead) : templates.fu1(lead);
-    if (isDry()) {
+    if (dry) {
       log(`[DRY] FU(${type}) -> ${lead.email} (${lead.name})`);
     } else {
       await email.send({ to: lead.email, subject: `Quick question about ${lead.name}`, html: tmpl.html, inReplyTo: lead.message_id, threadId: lead.thread_id });
@@ -96,13 +96,13 @@ async function processFollowups(leads, type, budget, seen) {
       await db.logEvent(lead.id, type);
     }
     sent++;
-    await jitter();
+    await jitter(dry);
   }
   if (sent) log(`${type.toUpperCase()} sent: ${sent}`);
   return sent;
 }
 
-async function processNew(leads, budget, seen) {
+async function processNew(leads, budget, seen, dry) {
   if (budget <= 0) return 0;
   const S = config.statuses;
   const candidates = leads
@@ -122,17 +122,17 @@ async function processNew(leads, budget, seen) {
     seen.add(em);
 
     const tmpl = templates.initial(lead);
-    if (isDry()) {
+    if (dry) {
       log(`[DRY] NEW -> ${lead.email} (${lead.name}) | subj: ${tmpl.subject}`);
     } else {
-      const sent = await email.send({ to: lead.email, subject: tmpl.subject, html: tmpl.html });
+      const result = await email.send({ to: lead.email, subject: tmpl.subject, html: tmpl.html });
       await db.updateLead(lead.id, {
-        outreach: S.emailSent, initial_date: t.todayStamp(), grp: dateLabel, message_id: sent.messageId || '', thread_id: sent.threadId || ''
+        outreach: S.emailSent, initial_date: t.todayStamp(), grp: dateLabel, message_id: result.messageId || '', thread_id: result.threadId || ''
       });
       await db.logEvent(lead.id, 'initial');
     }
     sent++;
-    await jitter();
+    await jitter(dry);
   }
   if (sent) log(`NEW sent: ${sent}`);
   return sent;
@@ -164,15 +164,16 @@ async function runSender(opts) {
     return;
   }
 
+  const dry = await liveMode.isDry();
   const leads = await db.allLeads();
-  await closeSweep(leads);
+  await closeSweep(leads, dry);
   if (remaining <= 0) { log(`Quota reached (${sentToday}/${quota}).`); return; }
 
   let budget = Math.min(remaining, Math.max(1, Math.ceil(remaining / remainingRunsToday())), config.sender.perRunCap);
   const seen = new Set();
-  budget -= await processFollowups(leads, 'fu2', budget, seen);
-  if (budget > 0) budget -= await processFollowups(leads, 'fu1', budget, seen);
-  if (budget > 0) await processNew(leads, budget, seen);
+  budget -= await processFollowups(leads, 'fu2', budget, seen, dry);
+  if (budget > 0) budget -= await processFollowups(leads, 'fu1', budget, seen, dry);
+  if (budget > 0) await processNew(leads, budget, seen, dry);
 }
 
 /**
@@ -199,13 +200,13 @@ async function sendOne(leadId) {
   else if (lead.outreach === S.fu1Sent) step = 'fu2';
   else return { error: 'sequence already complete for this lead' };
 
-  if (isDry()) { log(`[DRY] manual send ${step} -> ${lead.email} (${lead.name})`); return { dry: true, step }; }
+  if (await liveMode.isDry()) { log(`[DRY] manual send ${step} -> ${lead.email} (${lead.name})`); return { dry: true, step }; }
 
   if (step === 'initial') {
     const tmpl = templates.initial(lead);
-    const messageId = await email.send({ to: lead.email, subject: tmpl.subject, html: tmpl.html });
+    const result = await email.send({ to: lead.email, subject: tmpl.subject, html: tmpl.html });
     await db.updateLead(lead.id, {
-      outreach: S.emailSent, initial_date: t.todayStamp(), grp: t.dayMonthLabel(), message_id: sent.messageId || '', thread_id: sent.threadId || ''
+      outreach: S.emailSent, initial_date: t.todayStamp(), grp: t.dayMonthLabel(), message_id: result.messageId || '', thread_id: result.threadId || ''
     });
     await db.logEvent(lead.id, 'initial');
   } else {

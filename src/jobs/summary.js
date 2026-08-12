@@ -3,6 +3,7 @@
 const config = require('../config');
 const db = require('../db');
 const email = require('../email');
+const liveMode = require('../livemode');
 const { dailyQuota } = require('./sender');
 const t = require('../time');
 
@@ -31,7 +32,7 @@ async function runDailySummary() {
     `Queue (sendable): ${c.queue}\n\n` +
     `Totals — Email Sent: ${c.sent}, FU1: ${c.fu1}, FU2: ${c.fu2}, Closed: ${c.closed}\n`;
 
-  if (config.DRY_RUN || !config.report.summaryTo) { log('summary:\n' + body); return; }
+  if (await liveMode.isDry() || !config.report.summaryTo) { log('summary:\n' + body); return; }
   await email.notify(config.report.summaryTo,
     `📊 ${config.brand.companyName} Outreach: ${sentToday} sent, ${c.replied} replies`, body);
   log('summary emailed');

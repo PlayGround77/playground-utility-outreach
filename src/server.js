@@ -4,6 +4,7 @@ const express = require('express');
 const crypto = require('crypto');
 const config = require('./config');
 const db = require('./db');
+const liveMode = require('./livemode');
 const criteria = require('./criteria');
 const email = require('./email');
 const templates = require('./templates');
@@ -182,6 +183,7 @@ function makeApp() {
       const msg = req.query.msg ? esc(String(req.query.msg).slice(0, 300)) : '';
       const wOpen = windowOpen();
       const quota = dailyQuota();
+      const dry = await liveMode.isDry();
       const dupCount = await db.countDuplicates();
       const gmailConnected = await email.isConnected();
       const redirectUri = baseUrl(req) + '/oauth/callback';
@@ -274,9 +276,12 @@ function makeApp() {
         </td>
       </tr>`).join('');
 
-      const mode = config.DRY_RUN
+      const mode = dry
         ? '<span class="pill dry">DRY RUN · nothing is sent</span>'
         : '<span class="pill live">LIVE · sending real email</span>';
+      const dryToggle = `<form method="post" action="/drymode" onsubmit="return confirm(${dry
+        ? "'Go LIVE? Real emails will be sent according to the send mode below.'"
+        : "'Switch back to DRY RUN? No further emails will be sent.'"})"><input type="hidden" name="value" value="${dry ? 'false' : 'true'}"><button class="${dry ? 'primary' : ''}" title="Switch between DRY RUN (safe, simulates only) and LIVE (sends real email). Controlled entirely from here — no Railway needed.">${dry ? '🚀 Go LIVE' : '🧪 Back to DRY'}</button></form>`;
       const PILLS = {
         paused: '<span class="pill paused">PAUSED</span>',
         manual: '<span class="pill manual">MANUAL send</span>',
@@ -298,10 +303,10 @@ function makeApp() {
       res.send(shell(`
         <header>
           <h1>${esc(config.brand.companyName)} Utility Outreach</h1>
-          ${mode} ${sendPill} ${gmailPill}
+          ${mode} ${sendPill} ${gmailPill} ${dryToggle}
           <div class="toolbar">
             <form method="post" action="/run/refill"><button class="primary" title="Fetch new utility-app studios from AppStoreSpy using the search criteria below, screen them, and add them as leads">Source now</button></form>
-            <form method="post" action="/run/send"><button title="Send one paced batch now to leads in the queue — respects the daily quota, the send window, and DRY_RUN">Send tick</button></form>
+            <form method="post" action="/run/send"><button title="Send one paced batch now to leads in the queue — respects the daily quota, the send window, and DRY/LIVE mode">Send tick</button></form>
             <form method="post" action="/run/watch"><button title="Scan the inbox now for replies and bounces and update lead statuses">Check replies</button></form>
             <span class="seg">${modeCtl}</span>
             <form method="post" action="/test-email"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
@@ -324,7 +329,7 @@ function makeApp() {
           <span>Window: <b>${wOpen ? 'OPEN' : 'closed'}</b> (${config.sender.windowStartHour}:00–${config.sender.windowEndHour}:00, Mon–Fri)</span>
           <span>Sent today: <b>${sentToday} / ${quota}</b></span>
           <span>Duplicates: <b>${dupCount}</b>${dupCount ? ' (click 🔁 Dedupe)' : ''}</span>
-          <span id="nexttick" data-mode="${sendMode}" data-dry="${config.DRY_RUN ? '1' : '0'}">…</span>
+          <span id="nexttick" data-mode="${sendMode}" data-dry="${dry ? '1' : '0'}">…</span>
         </div>
 
         <div class="tiles">
@@ -431,7 +436,7 @@ function makeApp() {
           <b>MANUAL send</b> = the scheduler never sends on its own. Send per lead with the row’s <b>✉ Send</b> button
           (sends that studio’s next email: initial → FU1 → FU2), or a whole batch with <b>Send tick</b>.
           <b>AUTO send</b> = the scheduler sends automatically every 15 min in the window.
-          Either way, <b>nothing is sent while <code>DRY_RUN=true</code></b> (the master safety in Railway) — that is the go-live gate.
+          Either way, <b>nothing is sent while DRY RUN is on</b> (top-left toggle) — that is the go-live gate.
         </p>
         <p class="legend">Showing up to 500 of ${shown.length} matching leads (${leads.length} total).</p>
         <script>
@@ -489,6 +494,7 @@ function makeApp() {
   // Preview the exact email that would be sent next to a lead.
   app.get('/preview/:id', async (req, res) => {
     try {
+      const dry = await liveMode.isDry();
       const leads = await db.allLeads();
       const lead = leads.find((l) => String(l.id) === String(req.params.id));
       if (!lead) return res.status(404).send('Lead not found');
@@ -514,10 +520,10 @@ function makeApp() {
         </div>
         ${Number(lead.review_signals) ? `<div class="card" style="padding:1rem;max-width:760px;margin-top:1rem"><b>💬 Buy-signals found in reviews (${lead.review_signals}):</b><br><span class="muted">${esc(lead.review_evidence)}</span></div>` : ''}
         <p style="margin-top:1rem">
-          <form method="post" action="/action/${lead.id}/send" onsubmit="return confirm('Send this email now?')"><button class="send" title="Send this exact email now (respects DRY_RUN)">✉ Send this now</button></form>
+          <form method="post" action="/action/${lead.id}/send" onsubmit="return confirm('Send this email now?')"><button class="send" title="Send this exact email now (respects DRY/LIVE mode)">✉ Send this now</button></form>
           <a href="/" style="margin-left:.6rem">Cancel</a>
         </p>
-        <p class="legend">This is exactly what the recipient will receive${config.DRY_RUN ? ' — but DRY_RUN is on, so “Send this now” only simulates.' : '.'}</p>
+        <p class="legend">This is exactly what the recipient will receive${dry ? ' — but DRY RUN is on, so “Send this now” only simulates.' : '.'}</p>
       `));
     } catch (e) { res.status(500).send('Error: ' + esc(e.message)); }
   });
@@ -527,7 +533,7 @@ function makeApp() {
     try {
       const r = await sendOne(Number(req.params.id));
       if (r.error) return back(res, '⚠️ Not sent — ' + r.error);
-      if (r.dry) return back(res, 'DRY RUN — would send the ' + r.step + ' email now. Set DRY_RUN=false in Railway to actually send.');
+      if (r.dry) return back(res, 'DRY RUN — would send the ' + r.step + ' email now. Click 🚀 Go LIVE (top-left) to actually send.');
       return back(res, '✉ Sent the ' + r.step + ' email (immediately, no queue).');
     } catch (e) { return back(res, '⚠️ Send failed: ' + e.message); }
   });
@@ -558,6 +564,14 @@ function makeApp() {
     await db.setSetting('send_mode', v);
     const label = { paused: '⏸ Sending PAUSED — no automatic messages go out.', manual: '✋ Manual mode — you send per lead or with Send tick.', auto: '▶ Auto mode — the scheduler will send automatically.' };
     return back(res, label[v]);
+  });
+  // Dashboard-controlled DRY RUN <-> LIVE switch (no Railway visit needed).
+  app.post('/drymode', async (req, res) => {
+    const goLive = req.body.value === 'false';
+    await liveMode.setDry(!goLive);
+    return back(res, goLive
+      ? '🚀 LIVE — real email will now be sent (per the send mode below).'
+      : '🧪 Back to DRY RUN — nothing will be sent.');
   });
   app.post('/admin/clear', async (req, res) => {
     try { await db.clearLeads(); return back(res, 'All leads cleared.'); }
@@ -666,9 +680,10 @@ function makeApp() {
   app.post('/run/send', async (req, res) => {
     const mode = await db.getSetting('send_mode', 'manual');
     if (mode === 'paused') return back(res, '⏸ Sending is paused. Switch to Manual or Auto first.');
+    const dry = await liveMode.isDry();
     runSender({ scheduled: false }).catch((e) => console.error(e));
-    return back(res, config.DRY_RUN
-      ? 'Send tick ran in DRY RUN — nothing sent (see logs). Set DRY_RUN=false to send for real.'
+    return back(res, dry
+      ? 'Send tick ran in DRY RUN — nothing sent (see logs). Click 🚀 Go LIVE to send for real.'
       : 'Send tick triggered — sending a batch now; refresh to see the counters move.');
   });
   app.post('/run/watch', (req, res) => {

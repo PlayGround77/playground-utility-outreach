@@ -3,6 +3,7 @@
 const config = require('../config');
 const db = require('../db');
 const email = require('../email');
+const liveMode = require('../livemode');
 
 function log(m) { console.log('[watcher] ' + m); }
 
@@ -15,17 +16,18 @@ async function runReplyWatcher() {
 
   let scan;
   try { scan = await email.scanInbox(30); }
-  catch (e) { log('IMAP scan failed: ' + e.message); return; }
+  catch (e) { log('Gmail scan failed: ' + e.message); return; }
 
+  const dry = await liveMode.isDry();
   for (const lead of active) {
     const em = lead.email.toLowerCase();
     if (scan.bounceEmails.has(em)) {
-      if (config.DRY_RUN) { log(`[DRY] BOUNCE ${lead.name}`); continue; }
+      if (dry) { log(`[DRY] BOUNCE ${lead.name}`); continue; }
       await db.updateLead(lead.id, { response: R.notRelevant, outreach: S.sequenceClosed });
       await db.logEvent(lead.id, 'bounce');
       log('BOUNCE ' + lead.name);
     } else if (scan.replyEmails.has(em)) {
-      if (config.DRY_RUN) { log(`[DRY] REPLY ${lead.name}`); continue; }
+      if (dry) { log(`[DRY] REPLY ${lead.name}`); continue; }
       if (!lead.response) { // never overwrite a manual value
         await db.updateLead(lead.id, { response: R.respond });
         await db.logEvent(lead.id, 'reply');
