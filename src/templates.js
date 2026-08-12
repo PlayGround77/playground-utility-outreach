@@ -51,7 +51,7 @@ function initial(lead) {
   const html =
     `Hi ${studio} team,<br><br>` +
     `I came across ${lead_app} and was genuinely impressed with what you've built.<br><br>` +
-    `I'm ${config.brand.ownerName} from ${config.brand.companyName} — we acquire and grow mobile ` +
+    `I'm ${config.brand.ownerName} from ${config.brand.companyName}, and we acquire and grow mobile ` +
     `apps. I think ${appRef} has real potential, and I'd love to explore a possible acquisition.<br><br>` +
     `Would you be open to a quick 15-minute chat to see if there's a fit?` +
     signature();
@@ -63,7 +63,7 @@ function fu1(lead) {
   const lead_app = names.length ? names[0] : 'your app';
   const html =
     `Hi ${lead.name} team,<br><br>` +
-    `Just following up — I'm still very interested in exploring an acquisition of ${lead_app}. ` +
+    `Just following up, I'm still very interested in exploring an acquisition of ${lead_app}. ` +
     `We move quickly and make the process simple for founders.<br><br>` +
     `Would a quick 15-minute call this week work?` +
     signature();
@@ -78,7 +78,7 @@ function fu2(lead) {
   const html =
     `Hi ${lead.name} team,<br><br>` +
     `I'll close the loop here so I'm not cluttering your inbox. If you'd ever consider selling ` +
-    `${ref} — now or down the road — I'd genuinely love to talk.<br><br>` +
+    `${ref}, now or down the road, I'd genuinely love to talk.<br><br>` +
     `Just reply and we'll pick it up whenever the timing is right.` +
     signature();
   return { html };

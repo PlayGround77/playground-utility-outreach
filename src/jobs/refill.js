@@ -101,7 +101,8 @@ async function runPoolRefill(force) {
             installsTotal: cand.installsTotal, revPerInstall: cand.revPerInstall,
             hasIap: cand.hasIap, hasAds: cand.hasAds, website: cand.website,
             lastUpdate: cand.lastUpdate, opportunity: cand.opportunity,
-            reviewSignals: cand.reviewSignals || 0, reviewEvidence: cand.reviewEvidence || ''
+            reviewSignals: cand.reviewSignals || 0, reviewEvidence: cand.reviewEvidence || '',
+            platform: 'android' // only Google Play is wired up as a source today
           });
           // Email already exists from a previous run → add this app to it.
           if (!newId) { await db.appendApp('email', cand.email, cand.topApp); bump('merged_into_existing'); continue; }

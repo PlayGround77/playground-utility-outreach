@@ -198,6 +198,52 @@ function makeApp() {
       else if (view === 'blocked') shown = leads.filter((l) => l.grp === BL);
       // 'all' → no filter
 
+      // Column filters — free-text search + per-column numeric ranges + platform.
+      const qp = req.query;
+      const f = {
+        q: (qp.q || '').trim().toLowerCase(),
+        platform: qp.platform || '',
+        outreach: qp.f_outreach || '',
+        response: qp.f_response || '',
+        oppMin: qp.f_oppMin, oppMax: qp.f_oppMax,
+        instMin: qp.f_instMin, instMax: qp.f_instMax,
+        ratingMin: qp.f_ratingMin,
+        revMax: qp.f_revMax,
+        appsMin: qp.f_appsMin, appsMax: qp.f_appsMax,
+        prioMax: qp.f_prioMax
+      };
+      const anyFilterActive = f.q || f.platform || f.outreach || f.response ||
+        f.oppMin || f.oppMax || f.instMin || f.instMax || f.ratingMin || f.revMax ||
+        f.appsMin || f.appsMax || f.prioMax;
+      function num2(v) { const n = Number(v); return v !== undefined && v !== '' && Number.isFinite(n) ? n : null; }
+      if (anyFilterActive) {
+        shown = shown.filter((l) => {
+          if (f.q) {
+            const hay = [l.name, l.top_app, l.category, l.email].join(' ').toLowerCase();
+            if (!hay.includes(f.q)) return false;
+          }
+          if (f.platform && l.platform !== f.platform) return false;
+          if (f.outreach && l.outreach !== f.outreach) return false;
+          if (f.response && l.response !== f.response) return false;
+          const oppMin = num2(f.oppMin), oppMax = num2(f.oppMax);
+          if (oppMin !== null && Number(l.opportunity) < oppMin) return false;
+          if (oppMax !== null && Number(l.opportunity) > oppMax) return false;
+          const instMin = num2(f.instMin), instMax = num2(f.instMax);
+          if (instMin !== null && Number(l.installs_total) < instMin) return false;
+          if (instMax !== null && Number(l.installs_total) > instMax) return false;
+          const ratingMin = num2(f.ratingMin);
+          if (ratingMin !== null && Number(l.rating_avg) < ratingMin) return false;
+          const revMax = num2(f.revMax);
+          if (revMax !== null && Number(l.revenue_month) > revMax) return false;
+          const appsMin = num2(f.appsMin), appsMax = num2(f.appsMax);
+          if (appsMin !== null && Number(l.apps_count) < appsMin) return false;
+          if (appsMax !== null && Number(l.apps_count) > appsMax) return false;
+          const prioMax = num2(f.prioMax);
+          if (prioMax !== null && Number(l.priority) > prioMax) return false;
+          return true;
+        });
+      }
+
       const appCell = (l) => l.store_link
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
         : esc(l.top_app || '');
@@ -205,6 +251,7 @@ function makeApp() {
       const rows = shown.slice(0, 500).map((l) => `<tr>
         <td title="${esc(l.name)}"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></td>
         <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}${appBadge(l)}</td>
+        <td title="${l.platform === 'ios' ? 'iOS' : 'Android'}">${l.platform === 'ios' ? '🍎' : '🤖'}</td>
         <td class="num"><b style="color:${l.opportunity >= 70 ? '#059669' : l.opportunity >= 45 ? '#b45309' : 'inherit'}">${num(l.opportunity)}</b>${Number(l.review_signals) ? ` <span class="badge" title="${esc(l.review_evidence)}">💬${l.review_signals}</span>` : ''}</td>
         <td class="muted">${esc(l.category)}</td>
         <td class="num">${num(l.installs_day)}</td>
@@ -323,19 +370,52 @@ function makeApp() {
           <button form="bulkform" name="action" value="block" onclick="return confirm('Block the selected leads?')">⛔ Block selected</button>
           <button form="bulkform" name="action" value="delete" onclick="return confirm('Delete the selected leads permanently?')">🗑 Delete selected</button>
         </div>
-        <form method="get" action="/" style="margin:.4rem 0;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
-          <label>View:
-            <select name="view" onchange="this.form.submit()">
-              ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['blocked', 'Blocked only']]
-                .map(([v, l]) => `<option value="${v}"${view === v ? ' selected' : ''}>${l}</option>`).join('')}
-            </select>
-          </label>
-          <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
+        <form method="get" action="/" id="filterform" style="margin:.4rem 0">
+          <div class="bar">
+            <label>View:
+              <select name="view" onchange="this.form.submit()">
+                ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['blocked', 'Blocked only']]
+                  .map(([v, l]) => `<option value="${v}"${view === v ? ' selected' : ''}>${l}</option>`).join('')}
+              </select>
+            </label>
+            <input name="q" value="${esc(f.q)}" placeholder="Search studio, app, category, email…" style="width:220px">
+            <label>OS: <select name="platform" onchange="this.form.submit()">
+              <option value=""${!f.platform ? ' selected' : ''}>All</option>
+              <option value="android"${f.platform === 'android' ? ' selected' : ''}>🤖 Android</option>
+              <option value="ios"${f.platform === 'ios' ? ' selected' : ''}>🍎 iOS</option>
+            </select></label>
+            <button type="submit">Apply filters</button>
+            ${anyFilterActive ? '<a href="/">Clear filters</a>' : ''}
+            <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
+          </div>
+          <details class="crit" style="margin-top:.4rem">
+            <summary>🎛 More column filters (Opportunity, Installs, Rating, Revenue, Apps, Priority, Outreach/Response)</summary>
+            <div class="grid" style="margin-top:.6rem">
+              <label>Opportunity min<input name="f_oppMin" value="${esc(f.oppMin || '')}"></label>
+              <label>Opportunity max<input name="f_oppMax" value="${esc(f.oppMax || '')}"></label>
+              <label>Total installs min<input name="f_instMin" value="${esc(f.instMin || '')}"></label>
+              <label>Total installs max<input name="f_instMax" value="${esc(f.instMax || '')}"></label>
+              <label>Rating min<input name="f_ratingMin" value="${esc(f.ratingMin || '')}"></label>
+              <label>Revenue/mo max ($)<input name="f_revMax" value="${esc(f.revMax || '')}"></label>
+              <label>Apps count min<input name="f_appsMin" value="${esc(f.appsMin || '')}"></label>
+              <label>Apps count max<input name="f_appsMax" value="${esc(f.appsMax || '')}"></label>
+              <label>Priority max<input name="f_prioMax" value="${esc(f.prioMax || '')}"></label>
+              <label>Outreach status<select name="f_outreach">
+                <option value=""${!f.outreach ? ' selected' : ''}>Any</option>
+                ${OUTREACH_OPTS.filter(Boolean).map((o) => `<option value="${esc(o)}"${o === f.outreach ? ' selected' : ''}>${esc(o)}</option>`).join('')}
+              </select></label>
+              <label>Response status<select name="f_response">
+                <option value=""${!f.response ? ' selected' : ''}>Any</option>
+                ${RESPONSE_OPTS.filter(Boolean).map((o) => `<option value="${esc(o)}"${o === f.response ? ' selected' : ''}>${esc(o)}</option>`).join('')}
+              </select></label>
+            </div>
+            <p><button type="submit">Apply filters</button></p>
+          </details>
         </form>
         <p class="legend">The <b>Studio</b> and <b>Actions</b> columns stay pinned; scroll the table sideways for status &amp; details.</p>
         <div class="card wrap"><table>
           <thead><tr>
-            <th>Studio</th><th>App</th><th title="Acquisition Opportunity Score 0–100">Opp</th><th>Category</th><th>Inst/day</th><th>Total inst</th>
+            <th>Studio</th><th>App</th><th>OS</th><th title="Acquisition Opportunity Score 0–100">Opp</th><th>Category</th><th>Inst/day</th><th>Total inst</th>
             <th>Apps</th><th>Rev/mo</th><th>$/inst</th><th>Rating</th><th>Priority</th><th>Email</th><th>Store</th>
             <th>Outreach status</th><th>Response status</th><th>Group</th><th></th>
           </tr></thead>
