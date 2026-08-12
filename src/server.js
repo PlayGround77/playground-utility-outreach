@@ -297,6 +297,8 @@ function makeApp() {
         <td class="num">${num(l.priority)}</td>
         <td class="ell" title="${esc(l.email)}">${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''}</td>
         <td>${l.store_link ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">↗</a>` : ''}</td>
+        <td>${l.website ? `<a href="${esc(l.website)}" target="_blank" rel="noopener" title="${esc(l.website)}">🌐</a>` : '<span class="muted" title="No website listed — often a solo-dev signal">—</span>'}</td>
+        <td>${l.name ? `<a href="https://www.linkedin.com/search/results/all/?keywords=${encodeURIComponent(l.name)}" target="_blank" rel="noopener" title="Search LinkedIn for &quot;${esc(l.name)}&quot; (search, not a verified profile)">in</a>` : ''}</td>
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
         <td class="muted">${esc(l.grp)}</td>
@@ -465,6 +467,7 @@ function makeApp() {
             <b>Total inst / Inst/day:</b> all-time installs of this specific app, and the developer's current daily install velocity (still-alive demand).<br>
             <b>Rev/mo, $/inst:</b> the app's estimated monthly revenue, and revenue per install (low = weak monetization = upside).<br>
             <b>💬 badge:</b> number of reviews found complaining about price/ads or offering to pay — open <b>👁 Preview</b> on that lead to read the actual quotes.<br>
+            <b>Site / In:</b> 🌐 is the studio's own website as listed on Google Play (a dash means none is listed, which is itself a solo-dev signal and feeds the score). <b>in</b> opens a LinkedIn <i>search</i> for the studio name — AppStoreSpy provides no LinkedIn data, so it is a starting point for manual research, not a verified profile.<br>
             <b>View:</b> quick presets (e.g. "Queue" = never contacted yet). <b>Search:</b> matches Studio/App/Category/Email. <b>OS:</b> Android vs iOS (only Android is sourced today).<br>
             <b>More column filters:</b> set any combination of numeric ranges/statuses above and click Apply — they combine with View and Search.
           </div>
@@ -477,10 +480,10 @@ function makeApp() {
             <th title="Number of apps this developer has published">Apps</th><th title="This app's estimated revenue per month">Rev/mo</th><th title="Revenue per install — low means weak monetization (upside for acquisition)">$/inst</th>
             <th title="This app's Google Play rating (0–5) and number of ratings">Rating</th>
             <th title="Installs/day × total apps for this developer. A raw 'how big' number, NOT a quality signal — Google/Samsung score in the billions here. Used only to break ties after Opportunity; filter it out with 'Priority max'.">Priority</th>
-            <th>Email</th><th>Store</th>
+            <th>Email</th><th>Store</th><th title="The studio's own website, when Google Play lists one. Blank is itself a signal — solo devs often have none.">Site</th><th title="Opens a LinkedIn search for this studio name. It is a search, not a verified profile — AppStoreSpy provides no LinkedIn data.">In</th>
             <th>Outreach status</th><th>Response status</th><th>Group</th><th></th>
           </tr></thead>
-          <tbody>${rows || '<tr><td colspan="14" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="20" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
         </table></div>
 
         <p class="legend">

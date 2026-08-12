@@ -45,6 +45,11 @@ async function fetchWithBackoff(url, options) {
  * scored later per candidate). `crit` supplies installsTotalMin/Max, minRating,
  * minRatingCount. Returns an array of app rows.
  */
+// Fields the API has told us it doesn't accept for this endpoint. AppStoreSpy
+// replies 400 {"errors":[{"location":"fields","message":"Unknown fields",
+// "value":[...]}]}, so we remember and stop asking rather than failing forever.
+const rejectedFields = new Set();
+
 async function queryApps(category, page, limit, crit) {
   await countCall();
   const c = crit || {};
@@ -59,21 +64,47 @@ async function queryApps(category, page, limit, crit) {
   };
   if (c.minRating && c.minRating > 0) filter.rating_avg = { gte: c.minRating, lte: 5 };
   if (c.minRatingCount && c.minRatingCount > 0) filter.rating_count = { gte: c.minRatingCount };
-  const body = {
-    limit: limit || 100,
-    page: page || 1,
-    sort: '-downloads_daily', // ongoing install velocity = proven, still-alive demand
-    country: 'US',
-    fields: ['id', 'bundle', 'name', 'category', 'category_type',
-      'downloads_daily', 'downloads_exact', 'downloads_mark', 'revenue_month',
-      'rating_avg', 'rating_count', 'iap', 'ads', 'advertised', 'update_date',
-      'developer_name', 'developer_id', 'url_appstorespy'],
-    filter: filter
-  };
-  const res = await fetchWithBackoff(A.apiUrl + A.endpoint, {
-    method: 'POST', headers: headers(), body: JSON.stringify(body)
-  });
-  const json = await res.json().catch(() => ({}));
+
+  const wanted = ['id', 'bundle', 'name', 'category', 'category_type',
+    'downloads_daily', 'downloads_exact', 'downloads_mark', 'revenue_month',
+    'rating_avg', 'rating_count', 'iap', 'ads', 'advertised', 'update_date',
+    'developer_name', 'developer_id', 'url_appstorespy',
+    'website']; // studio's own site — also the "solo dev" signal in the score
+
+  async function attempt(fields) {
+    const body = {
+      limit: limit || 100,
+      page: page || 1,
+      sort: '-downloads_daily', // ongoing install velocity = proven, still-alive demand
+      country: 'US',
+      fields,
+      filter
+    };
+    const res = await fetchWithBackoff(A.apiUrl + A.endpoint, {
+      method: 'POST', headers: headers(), body: JSON.stringify(body)
+    });
+    const json = await res.json().catch(() => ({}));
+    return { res, json };
+  }
+
+  let fields = wanted.filter((f) => !rejectedFields.has(f));
+  let { res, json } = await attempt(fields);
+
+  // If the only problem is an unsupported optional field, drop it and retry once
+  // so a single unknown field can never break the whole sourcing run.
+  if (!res.ok && res.status === 400) {
+    const unknown = (json.errors || [])
+      .filter((e) => e && e.location === 'fields')
+      .flatMap((e) => Array.isArray(e.value) ? e.value : []);
+    const droppable = unknown.filter((f) => fields.includes(f));
+    if (droppable.length) {
+      droppable.forEach((f) => rejectedFields.add(f));
+      console.log('[appstorespy] API rejected field(s): ' + droppable.join(', ') + ' — retrying without them');
+      fields = fields.filter((f) => !rejectedFields.has(f));
+      ({ res, json } = await attempt(fields));
+    }
+  }
+
   if (!res.ok) throw new Error('queryApps HTTP ' + res.status + ' ' + JSON.stringify(json).slice(0, 200));
   return json.data || [];
 }
@@ -138,6 +169,7 @@ function mapAppRow(row) {
     ratingCount: Number(row.rating_count || 0),
     hasIap: !!row.iap,
     hasAds: !!(row.ads || row.advertised),
+    website: String(row.website || ''),
     lastUpdate: String(row.update_date || ''),
     storeLink: bundle
       ? 'https://play.google.com/store/apps/details?id=' + bundle
@@ -148,9 +180,8 @@ function mapAppRow(row) {
 const GENERIC_MAIL = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'proton.me', 'protonmail.com'];
 
 /** Acquisition Opportunity Score (0–100): demand × weak-monetization × acquirable. */
-function opportunityScore(appRow, dev, email, revPerInstall) {
+function opportunityScore(appRow, dev, email, revPerInstall, website) {
   const domain = (email.split('@')[1] || '').toLowerCase();
-  const website = String(dev.website || '');
   const totalApps = Number(dev.total_apps || 0);
   let s = 0;
 
@@ -183,7 +214,8 @@ function buildCandidate(appRow, dev) {
   const totalApps = Number(dev.total_apps || 0);
   const ipd = Number(dev.ipd || 0);
   const revPerInstall = appRow.appInstallsMonth > 0 ? (appRow.revenueMonth / appRow.appInstallsMonth) : 0;
-  const website = String(dev.website || '');
+  // Website comes from the app record (PlayDev has no website field at all).
+  const website = String(appRow.website || dev.website || '');
   // AppStoreSpy sometimes returns no developer name at all — never leave the
   // Studio column blank; fall back to the app name, then the developer ID.
   const devName = appRow.devName || String(dev.name || '') ||
@@ -206,7 +238,7 @@ function buildCandidate(appRow, dev) {
     hasAds: appRow.hasAds,
     website: website,
     lastUpdate: appRow.lastUpdate || '',
-    opportunity: opportunityScore(appRow, dev, email, revPerInstall),
+    opportunity: opportunityScore(appRow, dev, email, revPerInstall, website),
     storeLink: appRow.storeLink || website || String(dev.url || ''),
     priority: ipd * totalApps,
     topApp: appRow.appName || '',
