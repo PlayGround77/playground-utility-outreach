@@ -154,7 +154,32 @@ function shell(inner) {
   .banner{background:var(--chip);border:1px solid var(--accent);border-radius:10px;padding:.6rem .9rem;margin:.2rem 0 1rem;font-weight:500}
   .status{display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:.5rem .9rem;margin-bottom:1rem;font-size:.86rem}
   #nexttick{font-variant-numeric:tabular-nums;color:var(--muted)}
-</style></head><body><div class="container">${inner}</div></body></html>`;
+  .wrap{cursor:grab;-webkit-overflow-scrolling:touch}
+  .wrap.dragging{cursor:grabbing;user-select:none}
+  .wrap.dragging *{pointer-events:none}
+</style></head><body><div class="container">${inner}</div>
+<script>
+(function(){
+  // Drag-to-scroll (click-and-hold, then move) for any wide table wrapper.
+  document.querySelectorAll('.wrap').forEach(function(el){
+    var down=false, moved=false, startX=0, startScroll=0;
+    el.addEventListener('mousedown', function(e){
+      down=true; moved=false; startX=e.pageX; startScroll=el.scrollLeft;
+    });
+    window.addEventListener('mousemove', function(e){
+      if(!down) return;
+      var dx=e.pageX-startX;
+      if(Math.abs(dx)>4 && !moved){ moved=true; el.classList.add('dragging'); }
+      if(moved){ el.scrollLeft=startScroll-dx; e.preventDefault(); }
+    });
+    window.addEventListener('mouseup', function(){
+      if(moved) el.classList.remove('dragging');
+      down=false; moved=false;
+    });
+  });
+})();
+</script>
+</body></html>`;
 }
 
 function makeApp() {
