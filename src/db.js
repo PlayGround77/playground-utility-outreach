@@ -252,6 +252,20 @@ async function clearLeads() {
   await q('DELETE FROM events');
 }
 
+// Backfill blank studio names on already-imported leads (older sourcing runs
+// before the devName fallback existed). Returns the number of rows fixed.
+async function backfillBlankNames() {
+  const r = await q(
+    `UPDATE leads SET name = COALESCE(
+       NULLIF(top_app, '') || ' (studio unknown)',
+       'Dev #' || NULLIF(developer_id, ''),
+       'Unknown studio'
+     ), updated_at = now()
+     WHERE trim(name) = ''`
+  );
+  return r.rowCount || 0;
+}
+
 async function deleteLead(id) {
   await q('DELETE FROM events WHERE lead_id = $1', [id]);
   await q('DELETE FROM leads WHERE id = $1', [id]);
@@ -297,6 +311,6 @@ async function setSetting(key, value) {
 module.exports = {
   pool, q, init, allLeads, insertLead, updateLead, dedupIndex, clearLeads, deleteLead,
   countDuplicates, removeDuplicates, appendApp, duplicateGroups, mergeByEmail,
-  deleteExtrasByEmail, mergeAllDuplicates,
+  deleteExtrasByEmail, mergeAllDuplicates, backfillBlankNames,
   countSendable, logEvent, countToday, getSetting, setSetting, config
 };

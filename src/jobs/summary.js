@@ -26,7 +26,7 @@ async function runDailySummary() {
 
   const body =
     `${config.brand.companyName} Utility Outreach — daily summary (${t.todayStamp()})\n\n` +
-    `Sent today: ${sentToday} / ${dailyQuota()}\n` +
+    `Sent today: ${sentToday} / ${await dailyQuota()}\n` +
     `Bounced today: ${bouncedToday}\n` +
     `Replies awaiting you (Respond): ${c.replied}\n` +
     `Queue (sendable): ${c.queue}\n\n` +

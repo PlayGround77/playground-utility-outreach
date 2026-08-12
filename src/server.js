@@ -117,6 +117,7 @@ function shell(inner) {
   .seg button{padding:.4rem .55rem}
   .badge{display:inline-block;padding:0 .4rem;border-radius:999px;background:var(--chip);color:var(--accent);font-size:.72rem;font-weight:600}
   .toolbar{margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap}
+  .bar{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
   button{font:inherit;padding:.4rem .7rem;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;transition:.15s}
   button:hover{background:var(--hover)}
   button.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:600}
@@ -130,8 +131,11 @@ function shell(inner) {
   details.crit{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:.6rem 1rem;margin-bottom:1rem}
   details.crit summary{cursor:pointer;font-weight:600}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.7rem;margin:.7rem 0}
-  label{display:block;font-size:.8rem;color:var(--muted)}
-  input{font:inherit;width:100%;padding:.4rem;margin-top:.2rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+  .grid label{display:block;font-size:.8rem;color:var(--muted)}
+  .bar label{display:inline-flex;align-items:center;gap:.35rem;font-size:.85rem}
+  .help{font-size:.75rem;color:var(--muted);display:block;margin-top:.15rem}
+  input{font:inherit;padding:.4rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+  .grid input{width:100%;margin-top:.2rem}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
   .wrap{overflow-x:auto}
   table{border-collapse:collapse;width:100%;font-size:.85rem}
@@ -207,9 +211,12 @@ function makeApp() {
       const sendMode = await db.getSetting('send_mode', 'manual');
       const msg = req.query.msg ? esc(String(req.query.msg).slice(0, 300)) : '';
       const wOpen = windowOpen();
-      const quota = dailyQuota();
+      const quota = await dailyQuota();
       const dry = await liveMode.isDry();
       const dupCount = await db.countDuplicates();
+      const blankNameCount = leads.filter((l) => !String(l.name || '').trim()).length;
+      const lastWatchRun = await db.getSetting('last_watch_run', '');
+      const lastWatchStatus = await db.getSetting('last_watch_status', 'never run yet');
       const gmailConnected = await email.isConnected();
       const redirectUri = baseUrl(req) + '/oauth/callback';
 
@@ -336,7 +343,9 @@ function makeApp() {
             <span class="seg">${modeCtl}</span>
             <form method="post" action="/test-email"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
             <form method="get" action="/duplicates"><button title="Review & merge duplicate leads (same email) — combine their apps into one">🔁 Duplicates</button></form>
+            ${blankNameCount ? `<form method="post" action="/admin/fix-names" onsubmit="return confirm('Fix ${blankNameCount} lead(s) with a blank Studio name?')"><button class="primary" title="AppStoreSpy returned no developer name for these — fill in the app name or developer ID instead of leaving it blank">🩹 Fix ${blankNameCount} blank name${blankNameCount === 1 ? '' : 's'}</button></form>` : ''}
             <form method="get" action="/audit"><button title="Find possibly-irrelevant leads (giants, junk) to review and block">🔎 Audit</button></form>
+            <form method="get" action="/reviews"><button title="See the actual review quotes behind every 💬 buy-signal badge">💬 Reviews</button></form>
             <form method="post" action="/admin/clear" onsubmit="return confirm('Delete ALL leads and events? This cannot be undone.')"><button title="Delete all leads to start fresh">🗑 Clear</button></form>
           </div>
         </header>
@@ -352,9 +361,15 @@ function makeApp() {
 
         <div class="status">
           <span>Window: <b>${wOpen ? 'OPEN' : 'closed'}</b> (${config.sender.windowStartHour}:00–${config.sender.windowEndHour}:00, Mon–Fri)</span>
-          <span>Sent today: <b>${sentToday} / ${quota}</b></span>
+          <span>Sent today: <b>${sentToday}</b> /
+            <form method="post" action="/quota" style="display:inline-flex;align-items:center;gap:.3rem" title="Set a fixed number of emails to send per day. Leave empty/0 to use the automatic warm-up ramp (currently ${quota}/day).">
+              <input name="value" value="${crit.dailyQuotaOverride || ''}" placeholder="${quota}" style="width:55px;padding:.15rem .3rem">
+              <button style="padding:.15rem .5rem" title="Save this as the fixed daily email quota (0 = automatic ramp)">Set</button>
+            </form>
+          </span>
           <span>Duplicates: <b>${dupCount}</b>${dupCount ? ' (click 🔁 Dedupe)' : ''}</span>
           <span id="nexttick" data-mode="${sendMode}" data-dry="${dry ? '1' : '0'}">…</span>
+          <span id="replytick" data-last="${esc(lastWatchRun)}" title="${esc(lastWatchStatus)}">…</span>
         </div>
 
         <div class="tiles">
@@ -371,8 +386,8 @@ function makeApp() {
         <details class="crit">
           <summary>🔎 Search criteria — edit &amp; save; affects the next “Source now”</summary>
           <form method="post" action="/criteria">
-            <label>Categories (comma-separated Google Play APP categories)
-              <input name="categories" value="${esc(crit.categories.join(','))}"></label>
+            <label style="display:block;font-size:.8rem;color:var(--muted)">Categories (comma-separated Google Play APP categories)
+              <input name="categories" value="${esc(crit.categories.join(','))}" style="width:100%;margin-top:.2rem"></label>
             <div class="grid">
               <label>All-time installs — min<input name="installsTotalMin" value="${esc(crit.installsTotalMin)}"></label>
               <label>All-time installs — max<input name="installsTotalMax" value="${esc(crit.installsTotalMax)}"></label>
@@ -396,57 +411,73 @@ function makeApp() {
 
         <form id="bulkform" method="post" action="/bulk"></form>
         <div class="bar" style="margin:.4rem 0">
-          <label><input type="checkbox" onclick="document.querySelectorAll('.rowchk').forEach(function(c){c.checked=this.checked}.bind(this))"> Select all shown</label>
-          <button form="bulkform" name="action" value="block" onclick="return confirm('Block the selected leads?')">⛔ Block selected</button>
-          <button form="bulkform" name="action" value="delete" onclick="return confirm('Delete the selected leads permanently?')">🗑 Delete selected</button>
+          <label title="Check/uncheck every row currently shown (respects the active filters)"><input type="checkbox" onclick="document.querySelectorAll('.rowchk').forEach(function(c){c.checked=this.checked}.bind(this))"> Select all shown</label>
+          <button form="bulkform" name="action" value="block" onclick="return confirm('Block the selected leads?')" title="Move every checked row to the Block List — never contacted again">⛔ Block selected</button>
+          <button form="bulkform" name="action" value="delete" onclick="return confirm('Delete the selected leads permanently?')" title="Permanently delete every checked row">🗑 Delete selected</button>
         </div>
         <form method="get" action="/" id="filterform" style="margin:.4rem 0">
           <div class="bar">
-            <label>View:
-              <select name="view" onchange="this.form.submit()">
+            <label title="Quick presets: which leads to show based on their group/status">View:
+              <select name="view" onchange="this.form.submit()" title="Quick presets: which leads to show based on their group/status">
                 ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['blocked', 'Blocked only']]
                   .map(([v, l]) => `<option value="${v}"${view === v ? ' selected' : ''}>${l}</option>`).join('')}
               </select>
             </label>
-            <input name="q" value="${esc(f.q)}" placeholder="Search studio, app, category, email…" style="width:220px">
-            <label>OS: <select name="platform" onchange="this.form.submit()">
+            <input name="q" value="${esc(f.q)}" placeholder="Search studio, app, category, email…" style="width:220px" title="Free-text search across Studio, App name, Category, and Email">
+            <label title="Filter to only Android or only iOS leads">OS: <select name="platform" onchange="this.form.submit()" title="Filter to only Android or only iOS leads">
               <option value=""${!f.platform ? ' selected' : ''}>All</option>
               <option value="android"${f.platform === 'android' ? ' selected' : ''}>🤖 Android</option>
               <option value="ios"${f.platform === 'ios' ? ' selected' : ''}>🍎 iOS</option>
             </select></label>
-            <button type="submit">Apply filters</button>
-            ${anyFilterActive ? '<a href="/">Clear filters</a>' : ''}
+            <button type="submit" title="Apply the search box + OS filter above">Apply filters</button>
+            ${anyFilterActive ? '<a href="/" title="Remove every active filter and show the default view">Clear filters</a>' : ''}
             <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
           </div>
           <details class="crit" style="margin-top:.4rem">
             <summary>🎛 More column filters (Opportunity, Installs, Rating, Revenue, Apps, Priority, Outreach/Response)</summary>
             <div class="grid" style="margin-top:.6rem">
-              <label>Opportunity min<input name="f_oppMin" value="${esc(f.oppMin || '')}"></label>
-              <label>Opportunity max<input name="f_oppMax" value="${esc(f.oppMax || '')}"></label>
-              <label>Total installs min<input name="f_instMin" value="${esc(f.instMin || '')}"></label>
-              <label>Total installs max<input name="f_instMax" value="${esc(f.instMax || '')}"></label>
-              <label>Rating min<input name="f_ratingMin" value="${esc(f.ratingMin || '')}"></label>
-              <label>Revenue/mo max ($)<input name="f_revMax" value="${esc(f.revMax || '')}"></label>
-              <label>Apps count min<input name="f_appsMin" value="${esc(f.appsMin || '')}"></label>
-              <label>Apps count max<input name="f_appsMax" value="${esc(f.appsMax || '')}"></label>
-              <label>Priority max<input name="f_prioMax" value="${esc(f.prioMax || '')}"></label>
-              <label>Outreach status<select name="f_outreach">
+              <label title="Only show leads with an Opportunity Score at or above this (0–100)">Opportunity min<input name="f_oppMin" value="${esc(f.oppMin || '')}"></label>
+              <label title="Only show leads with an Opportunity Score at or below this (0–100)">Opportunity max<input name="f_oppMax" value="${esc(f.oppMax || '')}"></label>
+              <label title="Only show apps with at least this many all-time installs">Total installs min<input name="f_instMin" value="${esc(f.instMin || '')}"></label>
+              <label title="Only show apps with at most this many all-time installs">Total installs max<input name="f_instMax" value="${esc(f.instMax || '')}"></label>
+              <label title="Only show apps rated at or above this (0–5)">Rating min<input name="f_ratingMin" value="${esc(f.ratingMin || '')}"></label>
+              <label title="Only show leads earning at most this much per month — filters out already well-monetized apps">Revenue/mo max ($)<input name="f_revMax" value="${esc(f.revMax || '')}"></label>
+              <label title="Only show developers with at least this many published apps">Apps count min<input name="f_appsMin" value="${esc(f.appsMin || '')}"></label>
+              <label title="Only show developers with at most this many published apps — filters out giant app-farms">Apps count max<input name="f_appsMax" value="${esc(f.appsMax || '')}"></label>
+              <label title="Only show leads with Priority at or below this — filters out giants like Google/Samsung">Priority max<input name="f_prioMax" value="${esc(f.prioMax || '')}"></label>
+              <label title="Only show leads currently at this stage of the send sequence">Outreach status<select name="f_outreach">
                 <option value=""${!f.outreach ? ' selected' : ''}>Any</option>
                 ${OUTREACH_OPTS.filter(Boolean).map((o) => `<option value="${esc(o)}"${o === f.outreach ? ' selected' : ''}>${esc(o)}</option>`).join('')}
               </select></label>
-              <label>Response status<select name="f_response">
+              <label title="Only show leads with this Response status">Response status<select name="f_response">
                 <option value=""${!f.response ? ' selected' : ''}>Any</option>
                 ${RESPONSE_OPTS.filter(Boolean).map((o) => `<option value="${esc(o)}"${o === f.response ? ' selected' : ''}>${esc(o)}</option>`).join('')}
               </select></label>
             </div>
-            <p><button type="submit">Apply filters</button></p>
+            <p><button type="submit" title="Apply all the column filters above">Apply filters</button></p>
           </details>
         </form>
+        <details class="crit" style="margin:.4rem 0">
+          <summary>ℹ️ What do these columns &amp; filters mean? (tap to open — works on phones too)</summary>
+          <div style="margin-top:.6rem;font-size:.85rem;line-height:1.7">
+            <b>Opp (Opportunity Score, 0–100):</b> how good an acquisition target this app is — high demand (rating, reviews, installs) combined with weak monetization (low/no revenue, no ads/IAP) and signs it's cheap to buy (solo dev, no website, few apps). Higher is better. This is what the list is sorted by.<br>
+            <b>Priority:</b> installs/day × total apps published by this developer. It is a raw "how big is this developer" number, used only as a tie-breaker after Opportunity — a high Priority is <i>not</i> a good sign by itself (Google/Samsung score millions here); use "Priority max" in filters to hide giants.<br>
+            <b>Total inst / Inst/day:</b> all-time installs of this specific app, and the developer's current daily install velocity (still-alive demand).<br>
+            <b>Rev/mo, $/inst:</b> the app's estimated monthly revenue, and revenue per install (low = weak monetization = upside).<br>
+            <b>💬 badge:</b> number of reviews found complaining about price/ads or offering to pay — open <b>👁 Preview</b> on that lead to read the actual quotes.<br>
+            <b>View:</b> quick presets (e.g. "Queue" = never contacted yet). <b>Search:</b> matches Studio/App/Category/Email. <b>OS:</b> Android vs iOS (only Android is sourced today).<br>
+            <b>More column filters:</b> set any combination of numeric ranges/statuses above and click Apply — they combine with View and Search.
+          </div>
+        </details>
         <p class="legend">The <b>Studio</b> and <b>Actions</b> columns stay pinned; scroll the table sideways for status &amp; details.</p>
         <div class="card wrap"><table>
           <thead><tr>
-            <th>Studio</th><th>App</th><th>OS</th><th title="Acquisition Opportunity Score 0–100">Opp</th><th>Category</th><th>Inst/day</th><th>Total inst</th>
-            <th>Apps</th><th>Rev/mo</th><th>$/inst</th><th>Rating</th><th>Priority</th><th>Email</th><th>Store</th>
+            <th>Studio</th><th>App</th><th title="🤖 Android or 🍎 iOS">OS</th><th title="Acquisition Opportunity Score (0–100): demand × weak monetization × how cheap/easy to acquire. Sorted high to low.">Opp</th><th>Category</th>
+            <th title="Developer's current installs/day (install velocity)">Inst/day</th><th title="This app's all-time installs">Total inst</th>
+            <th title="Number of apps this developer has published">Apps</th><th title="This app's estimated revenue per month">Rev/mo</th><th title="Revenue per install — low means weak monetization (upside for acquisition)">$/inst</th>
+            <th title="This app's Google Play rating (0–5) and number of ratings">Rating</th>
+            <th title="Installs/day × total apps for this developer. A raw 'how big' number, NOT a quality signal — Google/Samsung score in the billions here. Used only to break ties after Opportunity; filter it out with 'Priority max'.">Priority</th>
+            <th>Email</th><th>Store</th>
             <th>Outreach status</th><th>Response status</th><th>Group</th><th></th>
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="14" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
@@ -475,6 +506,23 @@ function makeApp() {
             var txt = mode==='auto' ? ('⏱ Next auto send in '+cd) : ('⏱ Manual mode — auto tick would run in '+cd+' (idle)');
             if(dry) txt += ' · DRY: nothing is sent';
             el.textContent=txt;
+          }
+          tick(); setInterval(tick,1000);
+        })();
+        (function(){
+          var el=document.getElementById('replytick'); if(!el) return;
+          var lastIso=el.getAttribute('data-last');
+          function pad(n){return (n<10?'0':'')+n;}
+          function tick(){
+            var d=new Date(), into=(d.getMinutes()%30)*60+d.getSeconds(), left=1800-into; if(left<=0)left=1800;
+            var m=Math.floor(left/60), s=left%60, cd=pad(m)+':'+pad(s);
+            var agoTxt='never run yet';
+            if(lastIso){
+              var ms=d.getTime()-new Date(lastIso).getTime();
+              var mins=Math.floor(ms/60000);
+              agoTxt = mins<1 ? 'just now' : (mins<60 ? (mins+'m ago') : (Math.floor(mins/60)+'h '+(mins%60)+'m ago'));
+            }
+            el.textContent='📥 Last reply check: '+agoTxt+' · next in '+cd+' (every 30m)';
           }
           tick(); setInterval(tick,1000);
         })();
@@ -584,6 +632,13 @@ function makeApp() {
     } catch (e) { console.error('[criteria]', e.message); }
     res.redirect('/');
   });
+  app.post('/quota', async (req, res) => {
+    try {
+      const n = Number(req.body.value);
+      await criteria.set({ dailyQuotaOverride: Number.isFinite(n) && n > 0 ? n : 0 });
+      return back(res, n > 0 ? `Daily send quota set to ${n}/day.` : 'Daily send quota reset to the automatic warm-up ramp.');
+    } catch (e) { return back(res, '⚠️ Could not set quota: ' + e.message); }
+  });
   app.post('/mode', async (req, res) => {
     const v = ['paused', 'manual', 'auto'].includes(req.body.value) ? req.body.value : 'manual';
     await db.setSetting('send_mode', v);
@@ -605,6 +660,10 @@ function makeApp() {
   app.post('/admin/dedupe', async (req, res) => {
     try { const n = await db.removeDuplicates(); return back(res, `🔁 Removed ${n} duplicate lead${n === 1 ? '' : 's'} (kept one per email).`); }
     catch (e) { return back(res, '⚠️ Dedupe failed: ' + e.message); }
+  });
+  app.post('/admin/fix-names', async (req, res) => {
+    try { const n = await db.backfillBlankNames(); return back(res, `🩹 Fixed ${n} lead(s) with a blank Studio name (used the app name or developer ID instead).`); }
+    catch (e) { return back(res, '⚠️ Fix names failed: ' + e.message); }
   });
 
   // Gmail OAuth (HTTPS) — connect the sending mailbox without SMTP.
@@ -685,6 +744,28 @@ function makeApp() {
         <div class="card wrap"><table><thead><tr><th>Studio</th><th>App</th><th>Priority</th><th>Email</th><th>Reason</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`));
     } catch (e) { res.status(500).send('Error: ' + esc(e.message)); }
   });
+
+  // Dedicated, always-visible list of the actual review quotes behind the
+  // 💬 badge — no hovering required (title tooltips don't work on touch).
+  app.get('/reviews', async (req, res) => {
+    try {
+      const leads = (await db.allLeads()).filter((l) => Number(l.review_signals) > 0);
+      if (!leads.length) return res.send(shell('<p><a href="/">← Back to list</a></p><div class="banner">No review-based buy-signals found yet. Run “Source now” with “Mine reviews” enabled in Search criteria.</div>'));
+      const rows = leads.map((l) => `<tr>
+        <td><b>${esc(l.name)}</b></td>
+        <td>${l.store_link ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app)}</a>` : esc(l.top_app)}</td>
+        <td class="num">${num(l.review_signals)}</td>
+        <td class="num"><b>${num(l.opportunity)}</b></td>
+        <td style="white-space:normal;max-width:420px">${esc(l.review_evidence)}</td>
+        <td style="white-space:nowrap"><a href="/preview/${l.id}">👁 Preview</a></td>
+      </tr>`).join('');
+      res.send(shell(`<p><a href="/">← Back to list</a></p>
+        <h1 style="font-size:1.2rem">💬 Review evidence (${leads.length} leads)</h1>
+        <p class="legend">The actual review quotes the Opportunity Score's buy-signal boost is based on — sorted by Opportunity. Each row is a real excerpt found in that app's reviews on Google Play.</p>
+        <div class="card wrap"><table><thead><tr><th>Studio</th><th>App</th><th># signals</th><th>Opp</th><th>Review quotes found</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`));
+    } catch (e) { res.status(500).send('Error: ' + esc(e.message)); }
+  });
+
   app.post('/audit/block-all', async (req, res) => {
     try {
       const crit = await criteria.get();

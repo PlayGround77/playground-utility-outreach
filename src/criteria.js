@@ -36,6 +36,7 @@ function defaults() {
     minRatingCount: Number(process.env.MIN_RATING_COUNT) || 50,          // reliable rating
     maxApps: Number(process.env.MAX_APPS_PER_DEV) || 40,                 // avoid giant farms
     scanReviews: process.env.SCAN_REVIEWS === 'false' ? false : true,    // mine reviews for buy-signals (costs credits)
+    dailyQuotaOverride: Number(process.env.DAILY_QUOTA_OVERRIDE) || 0,   // 0 = use the warm-up ramp; >0 = fixed emails/day
     revenueMax: config.appStoreSpy.revenueMaxPerMonth,
     maxPriority: Number(process.env.MAX_PRIORITY) || 100000000, // flag giants above this (priority = ipd × apps)
     pagesPerCategory: config.appStoreSpy.pagesPerCategory,
@@ -64,7 +65,7 @@ function sanitize(input, base) {
     out.scanReviews = input.scanReviews === true || input.scanReviews === 'true' ||
       input.scanReviews === 'on' || input.scanReviews === '1';
   }
-  for (const f of ['installsMin', 'installsMax', 'minApps', 'installsTotalMin', 'installsTotalMax', 'minRating', 'minRatingCount', 'maxApps', 'revenueMax', 'maxPriority', 'pagesPerCategory', 'refillTarget']) {
+  for (const f of ['installsMin', 'installsMax', 'minApps', 'installsTotalMin', 'installsTotalMax', 'minRating', 'minRatingCount', 'maxApps', 'revenueMax', 'maxPriority', 'pagesPerCategory', 'refillTarget', 'dailyQuotaOverride']) {
     if (input[f] !== undefined && input[f] !== '') {
       const n = Number(input[f]);
       if (Number.isFinite(n)) out[f] = n;
@@ -78,6 +79,7 @@ function sanitize(input, base) {
   out.installsTotalMax = Math.max(out.installsTotalMin + 1, Math.round(out.installsTotalMax));
   out.minRatingCount = Math.max(0, Math.round(out.minRatingCount));
   out.maxApps = Math.max(1, Math.round(out.maxApps));
+  out.dailyQuotaOverride = Math.max(0, Math.round(out.dailyQuotaOverride));
   out.revenueMax = Math.max(0, Math.round(out.revenueMax));
   out.maxPriority = Math.max(0, Math.round(out.maxPriority));
   out.pagesPerCategory = Math.min(20, Math.max(1, Math.round(out.pagesPerCategory)));

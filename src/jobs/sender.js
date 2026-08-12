@@ -4,13 +4,17 @@ const config = require('../config');
 const db = require('../db');
 const email = require('../email');
 const templates = require('../templates');
+const criteria = require('../criteria');
 const { screenReason } = require('../guards');
 const liveMode = require('../livemode');
 const t = require('../time');
 
 function log(m) { console.log('[sender] ' + m); }
 
-function dailyQuota() {
+/** Dashboard "Daily send quota" override wins if set (>0); else the warm-up ramp. */
+async function dailyQuota() {
+  const crit = await criteria.get();
+  if (crit.dailyQuotaOverride > 0) return crit.dailyQuotaOverride;
   const ramp = config.sender.ramp;
   const start = new Date(config.sender.rampStartDate + 'T00:00:00Z');
   const weeks = Math.floor((Date.now() - start.getTime()) / (7 * 86400000));
@@ -153,7 +157,7 @@ async function runSender(opts) {
   }
   if (!withinWindow()) { log('Outside sending window — skip.'); return; }
 
-  const quota = dailyQuota();
+  const quota = await dailyQuota();
   const sentToday = await db.countToday(['initial', 'fu1', 'fu2']);
   const bouncedToday = await db.countToday(['bounce']);
   const remaining = quota - sentToday;

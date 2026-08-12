@@ -184,8 +184,13 @@ function buildCandidate(appRow, dev) {
   const ipd = Number(dev.ipd || 0);
   const revPerInstall = appRow.appInstallsMonth > 0 ? (appRow.revenueMonth / appRow.appInstallsMonth) : 0;
   const website = String(dev.website || '');
+  // AppStoreSpy sometimes returns no developer name at all — never leave the
+  // Studio column blank; fall back to the app name, then the developer ID.
+  const devName = appRow.devName || String(dev.name || '') ||
+    (appRow.appName ? appRow.appName + ' (studio unknown)' : '') ||
+    (appRow.devId ? 'Dev #' + appRow.devId : 'Unknown studio');
   return {
-    devName: appRow.devName || String(dev.name || ''),
+    devName,
     devId: appRow.devId,
     email,
     // Developer-level installs so daily & monthly are consistent (monthly = 30×daily).
