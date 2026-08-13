@@ -49,6 +49,10 @@ async function init() {
       review_signals INTEGER NOT NULL DEFAULT 0,
       review_evidence TEXT NOT NULL DEFAULT '',
       platform      TEXT NOT NULL DEFAULT 'android',
+      reply_snippet TEXT NOT NULL DEFAULT '',
+      reply_subject TEXT NOT NULL DEFAULT '',
+      reply_at      TEXT NOT NULL DEFAULT '',
+      reply_thread  TEXT NOT NULL DEFAULT '',
       grp           TEXT NOT NULL DEFAULT '',
       developer_id  TEXT NOT NULL DEFAULT '',
       message_id    TEXT NOT NULL DEFAULT '',
@@ -77,7 +81,11 @@ async function init() {
     'opportunity INTEGER NOT NULL DEFAULT 0',
     'review_signals INTEGER NOT NULL DEFAULT 0',
     "review_evidence TEXT NOT NULL DEFAULT ''",
-    "platform TEXT NOT NULL DEFAULT 'android'"
+    "platform TEXT NOT NULL DEFAULT 'android'",
+    "reply_snippet TEXT NOT NULL DEFAULT ''",
+    "reply_subject TEXT NOT NULL DEFAULT ''",
+    "reply_at TEXT NOT NULL DEFAULT ''",
+    "reply_thread TEXT NOT NULL DEFAULT ''"
   ]) {
     await q(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ${col};`);
   }

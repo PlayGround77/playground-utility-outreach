@@ -87,21 +87,27 @@ function headerVal(payload, name) {
 }
 
 /**
- * Scan the inbox (last `days` days) via the Gmail API and return sets of:
- *   replyEmails  — senders who wrote to us (replies)
+ * Scan the inbox (last `days` days) via the Gmail API and return:
+ *   replyEmails  — Set of sender addresses who wrote to us (replies)
+ *   replyInfo    — Map addr -> { snippet, subject, date, threadId } for the
+ *                  most recent reply from that address (so the dashboard can
+ *                  show what they actually said, not just that they replied)
  *   bounceEmails — recipient addresses found in mailer-daemon/postmaster bounces
  */
 async function scanInbox(days) {
   const g = await gmail();
   const me = config.gmail.user.toLowerCase();
   const replyEmails = new Set();
+  const replyInfo = new Map();
   const bounceEmails = new Set();
 
   const list = await g.users.messages.list({ userId: 'me', q: `in:inbox newer_than:${days || 30}d`, maxResults: 200 });
   const ids = (list.data.messages || []).map((m) => m.id);
 
   for (const id of ids) {
-    const msg = await g.users.messages.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['From'] });
+    const msg = await g.users.messages.get({
+      userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date']
+    });
     const from = (headerVal(msg.data.payload, 'From') || '').toLowerCase();
     const addr = (from.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i) || [''])[0];
     if (!addr || addr === me) continue;
@@ -114,9 +120,18 @@ async function scanInbox(days) {
       });
     } else {
       replyEmails.add(addr);
+      // messages.list returns newest first, so only keep the first one seen.
+      if (!replyInfo.has(addr)) {
+        replyInfo.set(addr, {
+          snippet: String(msg.data.snippet || '').slice(0, 500),
+          subject: headerVal(msg.data.payload, 'Subject') || '',
+          date: headerVal(msg.data.payload, 'Date') || '',
+          threadId: msg.data.threadId || ''
+        });
+      }
     }
   }
-  return { replyEmails, bounceEmails };
+  return { replyEmails, replyInfo, bounceEmails };
 }
 
 module.exports = { send, notify, scanInbox, isConnected, oauthClient, TOKEN_KEY };

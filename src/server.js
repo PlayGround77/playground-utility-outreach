@@ -301,6 +301,11 @@ function makeApp() {
         <td>${l.name ? `<a href="https://www.linkedin.com/search/results/all/?keywords=${encodeURIComponent(l.name)}" target="_blank" rel="noopener" title="Search LinkedIn for &quot;${esc(l.name)}&quot; (search, not a verified profile)">in</a>` : ''}</td>
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
+        <td class="ell" title="${esc(l.reply_snippet)}">${l.reply_snippet
+          ? (l.reply_thread
+              ? `<a href="https://mail.google.com/mail/u/0/#inbox/${esc(l.reply_thread)}" target="_blank" rel="noopener">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
+              : `💬 ${esc(l.reply_snippet.slice(0, 60))}…`)
+          : ''}</td>
         <td class="muted">${esc(l.grp)}</td>
         <td style="white-space:nowrap">
           <form method="get" action="/preview/${l.id}"><button title="See the exact email that will be sent to this lead">👁 Preview</button></form>
@@ -357,7 +362,13 @@ function makeApp() {
         ${st.replied ? `<div class="banner" style="border-color:#10b981;background:#dcfce7;color:#065f46">
           🎉 <b>${st.replied} lead${st.replied === 1 ? '' : 's'} replied to your email.</b>
           <a href="/?view=replied" style="margin-left:.5rem;font-weight:600">Show them →</a>
-          <span style="opacity:.8">Read the actual message in Gmail, then set “Booked a call” or “Not Relevant” on the row.</span>
+          <span style="opacity:.8">Set “Booked a call” or “Not Relevant” on the row once you have read them.</span>
+          ${leads.filter((l) => l.response === R.respond && l.reply_snippet).slice(0, 5).map((l) => `
+            <div style="margin-top:.5rem;padding:.5rem .7rem;background:#ffffff88;border-radius:8px">
+              <b>${esc(l.name)}</b>${l.reply_subject ? ` <span style="opacity:.7">— ${esc(l.reply_subject)}</span>` : ''}
+              ${l.reply_thread ? `<a href="https://mail.google.com/mail/u/0/#inbox/${esc(l.reply_thread)}" target="_blank" rel="noopener" style="margin-left:.4rem">open in Gmail →</a>` : ''}
+              <div style="opacity:.85;font-style:italic;margin-top:.2rem">“${esc(l.reply_snippet)}”</div>
+            </div>`).join('')}
         </div>` : ''}
 
         ${!gmailConnected ? `<div class="banner">📧 <b>Gmail is not connected</b> — no email can be sent until you connect it.
@@ -487,9 +498,9 @@ function makeApp() {
             <th title="This app's Google Play rating (0–5) and number of ratings">Rating</th>
             <th title="Installs/day × total apps for this developer. A raw 'how big' number, NOT a quality signal — Google/Samsung score in the billions here. Used only to break ties after Opportunity; filter it out with 'Priority max'.">Priority</th>
             <th>Email</th><th>Store</th><th title="The studio's own website, when Google Play lists one. Blank is itself a signal — solo devs often have none.">Site</th><th title="Opens a LinkedIn search for this studio name. It is a search, not a verified profile — AppStoreSpy provides no LinkedIn data.">In</th>
-            <th>Outreach status</th><th>Response status</th><th>Group</th><th></th>
+            <th>Outreach status</th><th>Response status</th><th title="What the lead actually wrote back (hover for more, or open the thread in Gmail)">Reply</th><th>Group</th><th></th>
           </tr></thead>
-          <tbody>${rows || '<tr><td colspan="20" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="21" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
         </table></div>
 
         <p class="legend">
