@@ -354,6 +354,12 @@ function makeApp() {
 
         ${msg ? `<div class="banner">${msg}</div>` : ''}
 
+        ${st.replied ? `<div class="banner" style="border-color:#10b981;background:#dcfce7;color:#065f46">
+          🎉 <b>${st.replied} lead${st.replied === 1 ? '' : 's'} replied to your email.</b>
+          <a href="/?view=replied" style="margin-left:.5rem;font-weight:600">Show them →</a>
+          <span style="opacity:.8">Read the actual message in Gmail, then set “Booked a call” or “Not Relevant” on the row.</span>
+        </div>` : ''}
+
         ${!gmailConnected ? `<div class="banner">📧 <b>Gmail is not connected</b> — no email can be sent until you connect it.
           ${config.google.clientId
             ? '<form method="get" action="/oauth/start" style="display:inline;margin-left:.5rem"><button class="primary">🔗 Connect Gmail</button></form>'
@@ -495,7 +501,14 @@ function makeApp() {
           <b>MANUAL send</b> = the scheduler never sends on its own. Send per lead with the row’s <b>✉ Send</b> button
           (sends that studio’s next email: initial → FU1 → FU2), or a whole batch with <b>Send tick</b>.
           <b>AUTO send</b> = the scheduler sends automatically every 15 min in the window.
-          Either way, <b>nothing is sent while DRY RUN is on</b> (top-left toggle) — that is the go-live gate.
+        </p>
+        <p class="legend">${dry
+          ? '🧪 <b>DRY RUN is ON — no email leaves the building.</b> Every send button only simulates and logs what it would do. Click <b>🚀 Go LIVE</b> (top-left) when you want real sends.'
+          : `🔴 <b>LIVE — real emails are really being sent.</b> ${sendMode === 'auto'
+              ? 'The scheduler is sending on its own every 15 min inside the send window.'
+              : sendMode === 'paused'
+                ? 'Sending is currently PAUSED, so nothing goes out until you switch to Manual or Auto.'
+                : 'You are in Manual mode, so mail goes out only when you click ✉ Send or Send tick.'} Switch to <b>🧪 Back to DRY</b> to stop.`}
         </p>
         <p class="legend">Showing up to 500 of ${shown.length} matching leads (${leads.length} total).</p>
         <script>
