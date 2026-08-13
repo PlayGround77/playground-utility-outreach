@@ -3,6 +3,7 @@
 const config = require('./config');
 const db = require('./db');
 const { todayStamp, sleep } = require('./time');
+const people = require('./people');
 
 const A = config.appStoreSpy;
 
@@ -69,7 +70,8 @@ async function queryApps(category, page, limit, crit) {
     'downloads_daily', 'downloads_exact', 'downloads_mark', 'revenue_month',
     'rating_avg', 'rating_count', 'iap', 'ads', 'advertised', 'update_date',
     'developer_name', 'developer_id', 'url_appstorespy',
-    'website']; // studio's own site — also the "solo dev" signal in the score
+    'website',          // studio's own site — also the "solo dev" signal in the score
+    'privacy_policy'];  // fallback source for the studio domain when website is blank
 
   async function attempt(fields) {
     const body = {
@@ -170,6 +172,7 @@ function mapAppRow(row) {
     hasIap: !!row.iap,
     hasAds: !!(row.ads || row.advertised),
     website: String(row.website || ''),
+    privacyPolicy: String(row.privacy_policy || ''),
     lastUpdate: String(row.update_date || ''),
     storeLink: bundle
       ? 'https://play.google.com/store/apps/details?id=' + bundle
@@ -178,6 +181,25 @@ function mapAppRow(row) {
 }
 
 const GENERIC_MAIL = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'proton.me', 'protonmail.com'];
+
+/** "https://foo.com/privacy/policy" -> "https://foo.com" (the studio's own site). */
+function hostAsSite(url) {
+  try {
+    const u = new URL(String(url || '').trim());
+    if (!/^https?:$/.test(u.protocol)) return '';
+    // Policy generators host everyone's policy — their domain is not the studio's.
+    if (/(google|firebase|freeprivacypolicy|privacypolicies|termsfeed|iubenda|app-privacy-policy|sites\.google|blogspot|wordpress\.com|github\.io|notion\.so|termly)\./i.test(u.hostname)) return '';
+    return u.origin;
+  } catch (e) { return ''; }
+}
+
+/** "jane@coolapps.io" -> "https://coolapps.io"; generic mailboxes give nothing. */
+function siteFromEmail(email) {
+  const domain = String(email || '').split('@')[1] || '';
+  if (!domain || GENERIC_MAIL.includes(domain.toLowerCase())) return '';
+  if (!/^[a-z0-9.-]+\.[a-z]{2,24}$/i.test(domain)) return '';
+  return 'https://' + domain.toLowerCase();
+}
 
 /** Acquisition Opportunity Score (0–100): demand × weak-monetization × acquirable. */
 function opportunityScore(appRow, dev, email, revPerInstall, website) {
@@ -215,7 +237,12 @@ function buildCandidate(appRow, dev) {
   const ipd = Number(dev.ipd || 0);
   const revPerInstall = appRow.appInstallsMonth > 0 ? (appRow.revenueMonth / appRow.appInstallsMonth) : 0;
   // Website comes from the app record (PlayDev has no website field at all).
-  const website = String(appRow.website || dev.website || '');
+  // When Play lists none, the privacy-policy host and then the email domain are
+  // both good stand-ins for the studio's own site - and a domain is what the
+  // site-enrichment step needs to have anything to read at all.
+  const listedSite = String(appRow.website || dev.website || '');
+  const website = listedSite || hostAsSite(appRow.privacyPolicy) || siteFromEmail(email);
+  const person = people.nameFromEmail(email);
   // AppStoreSpy sometimes returns no developer name at all — never leave the
   // Studio column blank; fall back to the app name, then the developer ID.
   const devName = appRow.devName || String(dev.name || '') ||
@@ -237,8 +264,17 @@ function buildCandidate(appRow, dev) {
     hasIap: appRow.hasIap,
     hasAds: appRow.hasAds,
     website: website,
+    contactName: person.name,
+    contactNameSource: person.name ? 'email' : '',
+    contactNameConfidence: person.confidence || '',
+    linkedin: '',
+    // PlayDev.hq_country — free, the developer call is already made, and it is
+    // what makes a LinkedIn name search actually narrow down.
+    country: people.countryName(dev.hq_country || dev.country || ''),
     lastUpdate: appRow.lastUpdate || '',
-    opportunity: opportunityScore(appRow, dev, email, revPerInstall, website),
+    // Scored on the *listed* site only: "Play lists no website" is the solo-dev
+    // signal, and a domain we inferred ourselves is not evidence of one.
+    opportunity: opportunityScore(appRow, dev, email, revPerInstall, listedSite),
     storeLink: appRow.storeLink || website || String(dev.url || ''),
     priority: ipd * totalApps,
     topApp: appRow.appName || '',
@@ -246,4 +282,4 @@ function buildCandidate(appRow, dev) {
   };
 }
 
-module.exports = { queryApps, getDeveloper, mapAppRow, buildCandidate, fetchReviews, scanReviewSignals, underCallCap, headers };
+module.exports = { queryApps, getDeveloper, mapAppRow, buildCandidate, fetchReviews, scanReviewSignals, underCallCap, headers, hostAsSite, siteFromEmail };

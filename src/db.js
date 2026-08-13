@@ -44,6 +44,11 @@ async function init() {
       has_iap       BOOLEAN NOT NULL DEFAULT false,
       has_ads       BOOLEAN NOT NULL DEFAULT false,
       website       TEXT NOT NULL DEFAULT '',
+      contact_name  TEXT NOT NULL DEFAULT '',
+      contact_name_source TEXT NOT NULL DEFAULT '',
+      linkedin_url  TEXT NOT NULL DEFAULT '',
+      country       TEXT NOT NULL DEFAULT '',
+      site_checked_at TEXT NOT NULL DEFAULT '',
       last_update   TEXT NOT NULL DEFAULT '',
       opportunity   INTEGER NOT NULL DEFAULT 0,
       review_signals INTEGER NOT NULL DEFAULT 0,
@@ -77,6 +82,11 @@ async function init() {
     'has_iap BOOLEAN NOT NULL DEFAULT false',
     'has_ads BOOLEAN NOT NULL DEFAULT false',
     "website TEXT NOT NULL DEFAULT ''",
+    "contact_name TEXT NOT NULL DEFAULT ''",
+    "contact_name_source TEXT NOT NULL DEFAULT ''",
+    "linkedin_url TEXT NOT NULL DEFAULT ''",
+    "country TEXT NOT NULL DEFAULT ''",
+    "site_checked_at TEXT NOT NULL DEFAULT ''",
     "last_update TEXT NOT NULL DEFAULT ''",
     'opportunity INTEGER NOT NULL DEFAULT 0',
     'review_signals INTEGER NOT NULL DEFAULT 0',
@@ -121,8 +131,9 @@ async function insertLead(lead) {
        (name,email,priority,top_app,apps_json,store_link,grp,developer_id,
         category,installs_day,installs_month,revenue_month,apps_count,rating_avg,rating_count,
         installs_total,rev_per_install,has_iap,has_ads,website,last_update,opportunity,
-        review_signals,review_evidence,platform)
-     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25
+        review_signals,review_evidence,platform,
+        contact_name,contact_name_source,linkedin_url,country,site_checked_at)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30
      WHERE $2 = '' OR NOT EXISTS (SELECT 1 FROM leads WHERE email <> '' AND lower(email) = lower($2))
      RETURNING id`,
     [lead.name, lead.email, lead.priority || 0, lead.topApp || '', appsJson, lead.storeLink || '',
@@ -131,7 +142,9 @@ async function insertLead(lead) {
       lead.ratingAvg || 0, lead.ratingCount || 0,
       lead.installsTotal || 0, lead.revPerInstall || 0, !!lead.hasIap, !!lead.hasAds,
       lead.website || '', lead.lastUpdate || '', lead.opportunity || 0,
-      lead.reviewSignals || 0, lead.reviewEvidence || '', lead.platform || 'android']
+      lead.reviewSignals || 0, lead.reviewEvidence || '', lead.platform || 'android',
+      lead.contactName || '', lead.contactNameSource || '', lead.linkedin || '',
+      lead.country || '', lead.siteCheckedAt || '']
   );
   return r.rows.length ? r.rows[0].id : null;
 }
@@ -274,6 +287,42 @@ async function backfillBlankNames() {
   return r.rowCount || 0;
 }
 
+/**
+ * Leads whose studio site is worth (re)reading: we have a site, we are still
+ * missing a verified name or LinkedIn, and we have not checked recently.
+ * Ordered by opportunity so a capped run spends its budget on the best leads.
+ */
+async function leadsNeedingEnrichment(limit, staleDays) {
+  const cutoff = new Date(Date.now() - (staleDays || 30) * 86400000)
+    .toISOString().slice(0, 10);
+  const r = await q(
+    `SELECT id, name, email, website, top_app, country, contact_name, linkedin_url
+       FROM leads
+      WHERE trim(website) <> ''
+        AND (trim(contact_name) = '' OR trim(linkedin_url) = '')
+        AND (site_checked_at = '' OR site_checked_at < $1)
+        AND outreach <> 'Block List'
+      ORDER BY opportunity DESC, id ASC
+      LIMIT $2`,
+    [cutoff, Math.max(1, Math.min(1000, limit || 100))]
+  );
+  return r.rows;
+}
+
+/** How much contact detail we actually have — drives the "is this worth paying for" call. */
+async function contactCoverage() {
+  const r = await q(
+    `SELECT count(*)::int AS total,
+            count(*) FILTER (WHERE trim(website) <> '')::int      AS with_site,
+            count(*) FILTER (WHERE trim(contact_name) <> '')::int AS with_name,
+            count(*) FILTER (WHERE contact_name_source = 'site')::int AS name_verified,
+            count(*) FILTER (WHERE trim(linkedin_url) <> '')::int AS with_linkedin,
+            count(*) FILTER (WHERE trim(country) <> '')::int      AS with_country
+       FROM leads`
+  );
+  return r.rows[0] || { total: 0, with_site: 0, with_name: 0, name_verified: 0, with_linkedin: 0, with_country: 0 };
+}
+
 async function deleteLead(id) {
   await q('DELETE FROM events WHERE lead_id = $1', [id]);
   await q('DELETE FROM leads WHERE id = $1', [id]);
@@ -320,5 +369,6 @@ module.exports = {
   pool, q, init, allLeads, insertLead, updateLead, dedupIndex, clearLeads, deleteLead,
   countDuplicates, removeDuplicates, appendApp, duplicateGroups, mergeByEmail,
   deleteExtrasByEmail, mergeAllDuplicates, backfillBlankNames,
+  leadsNeedingEnrichment, contactCoverage,
   countSendable, logEvent, countToday, getSetting, setSetting, config
 };

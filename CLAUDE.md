@@ -83,6 +83,43 @@ per-developer `getDeveloper()` → `buildCandidate()` → `guards.screenReason()
 - Optional review-mining (`scanReviews` criterion) fetches reviews and boosts the score on buy-signal
   phrases ("too expensive", "should be free"). Costs an extra API call per keeper.
 
+### Finding the human behind the app
+
+AppStoreSpy has **no person name and no LinkedIn field** — `PlayDev` is
+`name/email/url/total_apps/ipd/revenue/hq_country`, `PlayApp` is `emails/website/privacy_policy`.
+So a contact name is *derived* and a LinkedIn profile is only ever *searched for*. The deliverable is
+deliberately **a name plus enough context that a human recognises the right person** — not an
+auto-resolved profile. A wrong match here means emailing a stranger about buying an app they have
+nothing to do with.
+
+| Module | Role |
+|---|---|
+| `src/people.js` | pure: `nameFromEmail()`, `looksLikePerson()`, `linkedinSearches()`, `countryName()` |
+| `src/enrich.js` | reads the studio's own site (free) for a name / LinkedIn / better email |
+| `src/apify.js` | optional paid lookup, `APIFY_TOKEN` — **not** a LinkedIn scraper (see below) |
+
+- **`contact_name_source` is the trust marker.** `site` = read off their website (shown `✅`);
+  `email` = split out of the address (shown `~`, a guess). **Guessed names never reach
+  `src/templates.js`** — outreach still addresses the studio. This is deliberate, not an oversight.
+- **The website fallback chain** (`buildCandidate`) is listed site → privacy-policy host → email
+  domain, so enrichment has a domain to read. But `opportunityScore()` is passed the **listed site
+  only**: "Play lists no website" is the solo-dev signal, and a domain we inferred is not evidence
+  of one. Keep those two arguments distinct.
+- **`enrichFromSite` is opt-in** (criteria flag, like `scanReviews`) and wrapped in `try/catch` in
+  `refill.js` — enrichment failing must never break a sourcing run. It has its own daily fetch cap,
+  8s timeout, 1MB body cap, redirect cap and robots.txt check, because unlike AppStoreSpy these are
+  arbitrary third-party servers.
+- **Regexes in `enrich.js` must not carry the `/i` flag.** Capitalisation is the only thing
+  separating a name from surrounding prose; `/i` makes `[A-Z]` match lowercase, which swallows the
+  next word *and* backtracks catastrophically on a big page. Role keywords spell out their own case
+  via `ci()`. Likewise the email regex bounds its local part — an unbounded `+` before `@` is
+  quadratic on a long run with no `@` (this hung the test suite for 90s+ before it was bounded).
+- **`src/apify.js` runs Apify's Google Search Scraper** against `site:linkedin.com/in "<name>"`,
+  not a LinkedIn scraper: cheaper, far more stable (LinkedIn actively blocks scrapers), and it never
+  requests anything from LinkedIn. It returns *ranked candidates*, and it is opt-in and daily-capped
+  because it costs money per call. **Its request shape has not been verified against the live API** —
+  the dev sandbox's egress policy blocks `api.apify.com`.
+
 ### Guards are shared and defense-in-depth
 
 `src/guards.js` exports one `screenReason(cand)` used by **both** sourcing and **every** send

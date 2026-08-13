@@ -9,6 +9,9 @@ const criteria = require('./criteria');
 const email = require('./email');
 const templates = require('./templates');
 const { screenReason } = require('./guards');
+const people = require('./people');
+const apify = require('./apify');
+const enrich = require('./enrich');
 const t = require('./time');
 
 function appList(l) {
@@ -62,6 +65,38 @@ function basicAuth(req, res, next) {
     if (safeEqual(user, config.dashboard.user) && safeEqual(pass, config.dashboard.pass)) return next();
   }
   res.set('WWW-Authenticate', 'Basic realm="Outreach"').status(401).send('Auth required');
+}
+
+/* ---- finding the person behind the app ---- */
+
+// A name read off the studio's own site is evidence; a name split out of an
+// email address is a guess. The table always says which, because acting on a
+// guess means addressing a stranger by the wrong name.
+function contactCell(l) {
+  const name = String(l.contact_name || '');
+  if (!name) return '<span class="muted" title="No contact name found yet. Turn on site enrichment in Search criteria, or use Find to search by studio and app name instead.">—</span>';
+  const verified = l.contact_name_source === 'site';
+  const mark = verified ? '✅' : '~';
+  const why = verified
+    ? 'Read from the studio\'s own website - reliable'
+    : 'Guessed from the email address - unverified, do not use it to address them';
+  return `<span title="${esc(why)}">${mark} ${esc(name)}</span>`;
+}
+
+// LinkedIn searches, not a resolved profile. If the studio published a profile
+// link on its own site we show that instead, because that one is actually known.
+function findPersonCell(l) {
+  if (l.linkedin_url) {
+    return `<a href="${esc(l.linkedin_url)}" target="_blank" rel="noopener" title="LinkedIn profile the studio published on its own website - this one is verified">in ✅</a>`;
+  }
+  const searches = people.linkedinSearches({
+    contactName: l.contact_name, studio: l.name, appName: l.top_app, country: l.country
+  });
+  if (!searches.length) return '<span class="muted" title="Not enough signal to build a useful search">—</span>';
+  const links = searches.map((s) =>
+    `<a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.why)}">${esc(s.label)}</a>`
+  ).join('<br>');
+  return `<details class="find"><summary title="Ready-made LinkedIn searches for this lead">🔍 ${searches.length}</summary><div class="findbox">${links}</div></details>`;
 }
 
 /* ---- status option lists + colors ---- */
@@ -146,6 +181,13 @@ function shell(inner) {
   th{position:sticky;top:0;background:var(--panel);font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);z-index:1}
   tbody tr:hover{background:var(--hover)}
   td.ell{max-width:190px;overflow:hidden;text-overflow:ellipsis}
+  /* Find-person popover. Scoped to .find so it cannot leak into other <details>. */
+  details.find{position:relative}
+  details.find>summary{cursor:pointer;list-style:none;white-space:nowrap}
+  details.find>summary::-webkit-details-marker{display:none}
+  details.find .findbox{position:absolute;right:0;z-index:20;background:#fff;border:1px solid #d1d5db;
+    border-radius:6px;padding:.5rem .6rem;box-shadow:0 6px 18px rgba(0,0,0,.15);white-space:nowrap;font-size:.8rem;line-height:1.7}
+  details.find .findbox a{display:block}
   /* Pin the Studio (first) and Actions (last) columns so they stay on screen. */
   th:first-child,td:first-child{position:sticky;left:0;background:var(--panel);z-index:2;max-width:160px;overflow:hidden;text-overflow:ellipsis}
   th:last-child,td:last-child{position:sticky;right:0;background:var(--panel);z-index:2;box-shadow:-6px 0 6px -6px rgba(0,0,0,.25)}
@@ -218,6 +260,13 @@ function makeApp() {
       const dry = await liveMode.isDry();
       const dupCount = await db.countDuplicates();
       const blankNameCount = leads.filter((l) => !String(l.name || '').trim()).length;
+      // How much contact detail we actually hold — this is the number that says
+      // whether paying for external enrichment is worth it yet.
+      const cov = await db.contactCoverage();
+      cov.needs_enrich = leads.filter((l) =>
+        String(l.website || '').trim() &&
+        (!String(l.contact_name || '').trim() || !String(l.linkedin_url || '').trim()) &&
+        !String(l.site_checked_at || '').trim()).length;
       const lastWatchRun = await db.getSetting('last_watch_run', '');
       const lastWatchStatus = await db.getSetting('last_watch_status', 'never run yet');
       const gmailConnected = await email.isConnected();
@@ -301,7 +350,9 @@ function makeApp() {
         <td class="ell" title="${esc(l.email)}">${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''}</td>
         <td>${l.store_link ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">↗</a>` : ''}</td>
         <td>${l.website ? `<a href="${esc(l.website)}" target="_blank" rel="noopener" title="${esc(l.website)}">🌐</a>` : '<span class="muted" title="No website listed — often a solo-dev signal">—</span>'}</td>
-        <td>${l.name ? `<a href="https://www.linkedin.com/search/results/all/?keywords=${encodeURIComponent(l.name)}" target="_blank" rel="noopener" title="Search LinkedIn for &quot;${esc(l.name)}&quot; (search, not a verified profile)">in</a>` : ''}</td>
+        <td class="ell">${contactCell(l)}</td>
+        <td class="muted">${esc(l.country)}</td>
+        <td>${findPersonCell(l)}</td>
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
         <td class="ell" title="${esc(l.reply_snippet)}">${l.reply_snippet
@@ -354,6 +405,7 @@ function makeApp() {
             <form method="post" action="/test-email"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
             <form method="get" action="/duplicates"><button title="Review & merge duplicate leads (same email) — combine their apps into one">🔁 Duplicates</button></form>
             ${blankNameCount ? `<form method="post" action="/admin/fix-names" onsubmit="return confirm('Fix ${blankNameCount} lead(s) with a blank Studio name?')"><button class="primary" title="AppStoreSpy returned no developer name for these — fill in the app name or developer ID instead of leaving it blank">🩹 Fix ${blankNameCount} blank name${blankNameCount === 1 ? '' : 's'}</button></form>` : ''}
+            ${cov.needs_enrich ? `<form method="post" action="/admin/enrich"><input type="hidden" name="batch" value="50"><button title="Read up to 50 studio websites for a founder name and a LinkedIn link. Free - no API credits - but takes a minute.">🔎 Find people (${cov.needs_enrich})</button></form>` : ''}
             <form method="get" action="/audit"><button title="Find possibly-irrelevant leads (giants, junk) to review and block">🔎 Audit</button></form>
             <form method="get" action="/reviews"><button title="See the actual review quotes behind every 💬 buy-signal badge">💬 Reviews</button></form>
             <form method="post" action="/admin/clear" onsubmit="return confirm('Delete ALL leads and events? This cannot be undone.')"><button title="Delete all leads to start fresh">🗑 Clear</button></form>
@@ -426,6 +478,10 @@ function makeApp() {
               <input type="checkbox" name="scanReviews" ${crit.scanReviews ? 'checked' : ''}>
               Mine reviews for buy-signals (“too expensive”, “should be free”…) — boosts Opportunity, uses more API credits
             </label>
+            <label style="display:flex;align-items:center;gap:.4rem;margin:.4rem 0">
+              <input type="checkbox" name="enrichFromSite" ${crit.enrichFromSite ? 'checked' : ''}>
+              Read each studio’s own website for the founder’s name and LinkedIn — free (no API credits), but makes sourcing slower
+            </label>
             <button class="primary" title="Save these search criteria to the database; they take effect on the next “Source now” and scheduled refill">Save criteria</button>
             <span class="muted" style="font-size:.78rem">Valid: ${criteria.VALID_CATEGORIES.join(', ')}</span>
           </form>
@@ -487,7 +543,15 @@ function makeApp() {
             <b>Total inst / Inst/day:</b> all-time installs of this specific app, and the developer's current daily install velocity (still-alive demand).<br>
             <b>Rev/mo, $/inst:</b> the app's estimated monthly revenue, and revenue per install (low = weak monetization = upside).<br>
             <b>💬 badge:</b> number of reviews found complaining about price/ads or offering to pay — open <b>👁 Preview</b> on that lead to read the actual quotes.<br>
-            <b>Site / In:</b> 🌐 is the studio's own website as listed on Google Play (a dash means none is listed, which is itself a solo-dev signal and feeds the score). <b>in</b> opens a LinkedIn <i>search</i> for the studio name — AppStoreSpy provides no LinkedIn data, so it is a starting point for manual research, not a verified profile.<br>
+            <b>Site:</b> 🌐 is the studio's own website. It comes from Google Play when listed; otherwise it is inferred from the privacy-policy link or the email domain. A dash means we found nothing, which is itself a solo-dev signal (the score only counts a website Google Play actually listed).<br>
+            <b>Contact:</b> the person behind the app. <b>✅</b> means the name was read off the studio's own website and is reliable. <b>~</b> means it was split out of the email address (jane.doe@… → Jane Doe) and is a <i>guess</i> — never address someone by a ~ name without checking. Outreach emails deliberately keep using the studio name.<br>
+            <b>Country:</b> where the studio is based, from AppStoreSpy. Its job is to narrow down a common name on LinkedIn.<br>
+            <b>Contact coverage right now:</b> ${cov.total} lead${cov.total === 1 ? '' : 's'} —
+            ${cov.with_site} with a website, ${cov.with_name} with a contact name
+            (${cov.name_verified} of those verified from the studio site),
+            ${cov.with_linkedin} with a LinkedIn URL, ${cov.with_country} with a country.
+            Check these numbers before paying for external enrichment: if the free steps already cover most leads, there is nothing to buy.<br>
+            <b>Find:</b> opens ready-made LinkedIn <i>searches</i> for this lead — by name + studio, by name + country, by app name (developers often list their own app in their profile), and by studio + role. These are searches, not verified profiles: you pick the right person. <b>in ✅</b> appears instead when the studio published its own LinkedIn link, which is the one case where the profile is known rather than guessed.<br>
             <b>View:</b> quick presets (e.g. "Queue" = never contacted yet). <b>Search:</b> matches Studio/App/Category/Email. <b>OS:</b> Android vs iOS (only Android is sourced today).<br>
             <b>More column filters:</b> set any combination of numeric ranges/statuses above and click Apply — they combine with View and Search.
           </div>
@@ -500,7 +564,10 @@ function makeApp() {
             <th title="Number of apps this developer has published">Apps</th><th title="This app's estimated revenue per month">Rev/mo</th><th title="Revenue per install — low means weak monetization (upside for acquisition)">$/inst</th>
             <th title="This app's Google Play rating (0–5) and number of ratings">Rating</th>
             <th title="Installs/day × total apps for this developer. A raw 'how big' number, NOT a quality signal — Google/Samsung score in the billions here. Used only to break ties after Opportunity; filter it out with 'Priority max'.">Priority</th>
-            <th>Email</th><th>Store</th><th title="The studio's own website, when Google Play lists one. Blank is itself a signal — solo devs often have none.">Site</th><th title="Opens a LinkedIn search for this studio name. It is a search, not a verified profile — AppStoreSpy provides no LinkedIn data.">In</th>
+            <th>Email</th><th>Store</th><th title="The studio's own website, when Google Play lists one. Blank is itself a signal — solo devs often have none.">Site</th>
+            <th title="The person behind the app. ✅ was read off the studio's own site; ~ was guessed from the email address and is unverified.">Contact</th>
+            <th title="Where the studio is based (AppStoreSpy hq_country). Narrows down a common name on LinkedIn.">Country</th>
+            <th title="Opens ready-made LinkedIn searches for this lead — by name, by studio, and by app name. These are searches, not verified profiles: you pick the right person.">Find</th>
             <th>Outreach status</th><th>Response status</th><th title="What the lead actually wrote back (hover for more, or open the thread in Gmail)">Reply</th><th>Group</th><th></th>
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="21" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
@@ -622,6 +689,37 @@ function makeApp() {
           <div style="line-height:1.6">${html}</div>
         </div>
         ${Number(lead.review_signals) ? `<div class="card" style="padding:1rem;max-width:760px;margin-top:1rem"><b>💬 Buy-signals found in reviews (${lead.review_signals}):</b><br><span class="muted">${esc(lead.review_evidence)}</span></div>` : ''}
+
+        <div class="card" style="padding:1rem;max-width:760px;margin-top:1rem">
+          <b>🧑 Who is behind this app?</b>
+          <div style="margin-top:.5rem;line-height:1.8">
+            <div><b>Studio:</b> ${esc(lead.name)}${lead.country ? ` <span class="muted">(${esc(lead.country)})</span>` : ''}</div>
+            <div><b>Contact name:</b> ${lead.contact_name
+              ? `${esc(lead.contact_name)} ${lead.contact_name_source === 'site'
+                  ? '<span style="color:#059669">✅ read from their website</span>'
+                  : '<span style="color:#b45309">~ guessed from the email address, unverified</span>'}`
+              : '<span class="muted">not found</span>'}</div>
+            <div><b>Website:</b> ${lead.website ? `<a href="${esc(lead.website)}" target="_blank" rel="noopener">${esc(lead.website)}</a>` : '<span class="muted">none</span>'}</div>
+            <div><b>LinkedIn:</b> ${lead.linkedin_url
+              ? `<a href="${esc(lead.linkedin_url)}" target="_blank" rel="noopener">${esc(lead.linkedin_url)}</a>`
+              : '<span class="muted">not resolved - use a search below</span>'}</div>
+          </div>
+          ${(() => {
+            const searches = people.linkedinSearches({
+              contactName: lead.contact_name, studio: lead.name, appName: lead.top_app, country: lead.country
+            });
+            if (!searches.length) return '';
+            return `<div style="margin-top:.7rem;padding-top:.7rem;border-top:1px solid var(--line)">
+              <div class="muted" style="font-size:.8rem;margin-bottom:.3rem">Search LinkedIn - each angle finds a different kind of match, and you decide which hit is the right person:</div>
+              ${searches.map((s) => `<div><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a> <span class="muted" style="font-size:.78rem">- ${esc(s.why)}</span></div>`).join('')}
+            </div>`;
+          })()}
+          <div style="margin-top:.7rem">
+            <form method="post" action="/action/${lead.id}/linkedin">
+              <button title="Look the profile up automatically through Apify (searches Google's index of public LinkedIn profiles). Costs money per lookup, so use it on leads you actually intend to contact.">🔗 Look up LinkedIn automatically</button>
+            </form>
+          </div>
+        </div>
         <p style="margin-top:1rem">
           <form method="post" action="/action/${lead.id}/send" onsubmit="return confirm('Send this email now?')"><button class="send" title="Send this exact email now (respects DRY/LIVE mode)">✉ Send this now</button></form>
           <a href="/" style="margin-left:.6rem">Cancel</a>
@@ -657,7 +755,9 @@ function makeApp() {
   });
   app.post('/criteria', async (req, res) => {
     try {
-      req.body.scanReviews = req.body.scanReviews ? 'true' : 'false'; // checkbox: absent = off
+      // checkboxes: an unticked box is absent from the body entirely
+      req.body.scanReviews = req.body.scanReviews ? 'true' : 'false';
+      req.body.enrichFromSite = req.body.enrichFromSite ? 'true' : 'false';
       await criteria.set(req.body || {});
     } catch (e) { console.error('[criteria]', e.message); }
     res.redirect('/');
@@ -694,6 +794,57 @@ function makeApp() {
   app.post('/admin/fix-names', async (req, res) => {
     try { const n = await db.backfillBlankNames(); return back(res, `🩹 Fixed ${n} lead(s) with a blank Studio name (used the app name or developer ID instead).`); }
     catch (e) { return back(res, '⚠️ Fix names failed: ' + e.message); }
+  });
+
+  // Read studio websites for leads we already have. Runs in the background and
+  // reports through the banner, because a batch of sites takes minutes and an
+  // HTTP request that hangs that long just times out in the browser.
+  app.post('/admin/enrich', async (req, res) => {
+    const batch = Math.max(1, Math.min(500, Number(req.body.batch) || 50));
+    let rows;
+    try { rows = await db.leadsNeedingEnrichment(batch, 30); }
+    catch (e) { return back(res, '⚠️ Enrich failed: ' + e.message); }
+    if (!rows.length) return back(res, 'Nothing to enrich - every lead with a website already has a contact name and LinkedIn.');
+
+    (async () => {
+      let named = 0, linked = 0;
+      for (const row of rows) {
+        try {
+          const found = await enrich.enrichFromSite(row.website);
+          const fields = { site_checked_at: new Date().toISOString().slice(0, 10) };
+          // Only overwrite a guessed name - a name read off the site outranks one
+          // split out of an email, but never clobber something already verified.
+          if (found.contactName && row.contact_name !== found.contactName) {
+            fields.contact_name = found.contactName;
+            fields.contact_name_source = 'site';
+            named++;
+          }
+          if (found.linkedin && !row.linkedin_url) { fields.linkedin_url = found.linkedin; linked++; }
+          await db.updateLead(row.id, fields);
+        } catch (e) { /* one bad site must not stop the batch */ }
+      }
+      console.log(`[enrich] backfill done: ${rows.length} sites read, ${named} names, ${linked} LinkedIn URLs`);
+    })().catch((e) => console.error('[enrich] backfill crashed', e));
+
+    return back(res, `🔎 Reading ${rows.length} studio website${rows.length === 1 ? '' : 's'} in the background. Refresh in a minute to see names and LinkedIn links appear.`);
+  });
+
+  // Paid LinkedIn lookup for one shortlisted lead (Apify + Google index).
+  app.post('/action/:id/linkedin', async (req, res) => {
+    try {
+      const r = await db.q('SELECT * FROM leads WHERE id = $1', [req.params.id]);
+      const lead = r.rows[0];
+      if (!lead) return back(res, '⚠️ Lead not found.');
+
+      const out = await apify.findProfiles(lead);
+      if (out.skipped) return back(res, `⚠️ LinkedIn lookup skipped: ${out.skipped}`);
+      if (!out.candidates.length) return back(res, `No LinkedIn profile found for ${lead.name}. Try the 🔍 Find searches by hand.`);
+
+      const best = out.candidates[0];
+      await db.updateLead(lead.id, { linkedin_url: best.url });
+      const others = out.candidates.length - 1;
+      return back(res, `🔗 Best match for ${lead.name}: ${best.url}${others ? ` (${others} other candidate${others === 1 ? '' : 's'} found - check it is the right person)` : ''}`);
+    } catch (e) { return back(res, '⚠️ LinkedIn lookup failed: ' + e.message); }
   });
 
   // Gmail OAuth (HTTPS) — connect the sending mailbox without SMTP.

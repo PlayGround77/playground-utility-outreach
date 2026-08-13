@@ -6,6 +6,7 @@ const ass = require('../appstorespy');
 const email = require('../email');
 const criteria = require('../criteria');
 const liveMode = require('../livemode');
+const enrich = require('../enrich');
 const { screenReason } = require('../guards');
 const t = require('../time');
 
@@ -91,6 +92,23 @@ async function runPoolRefill(force) {
             } catch (e) { /* reviews are optional */ }
           }
 
+          // Read the studio's own site for the human behind the app. This is the
+          // only step that can turn a name guessed from an email into a real one,
+          // or hand us a LinkedIn URL the studio published itself. Best-effort by
+          // design - a slow or hostile site must never stall a sourcing run.
+          if (crit.enrichFromSite && cand.website) {
+            try {
+              const found = await enrich.enrichFromSite(cand.website);
+              if (found.contactName) {
+                cand.contactName = found.contactName;
+                cand.contactNameSource = 'site';
+              }
+              if (found.linkedin) cand.linkedin = found.linkedin;
+              if (found.email && !cand.email) cand.email = found.email;
+              cand.siteCheckedAt = new Date().toISOString().slice(0, 10);
+            } catch (e) { /* enrichment is optional */ }
+          }
+
           // Sourcing always writes to our own DB (safe + needed for review).
           // Only EMAIL sending is gated by DRY_RUN. insertLead skips duplicates.
           const newId = await db.insertLead({
@@ -101,6 +119,9 @@ async function runPoolRefill(force) {
             ratingAvg: cand.ratingAvg, ratingCount: cand.ratingCount,
             installsTotal: cand.installsTotal, revPerInstall: cand.revPerInstall,
             hasIap: cand.hasIap, hasAds: cand.hasAds, website: cand.website,
+            contactName: cand.contactName || '', contactNameSource: cand.contactNameSource || '',
+            linkedin: cand.linkedin || '', country: cand.country || '',
+            siteCheckedAt: cand.siteCheckedAt || '',
             lastUpdate: cand.lastUpdate, opportunity: cand.opportunity,
             reviewSignals: cand.reviewSignals || 0, reviewEvidence: cand.reviewEvidence || '',
             platform: 'android' // only Google Play is wired up as a source today
