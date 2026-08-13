@@ -107,12 +107,15 @@ function shell(inner) {
   header{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;margin-bottom:1rem}
   h1{font-size:1.25rem;margin:0;font-weight:650}
   .pill{padding:.2rem .6rem;border-radius:999px;font-size:.78rem;font-weight:600;border:1px solid}
-  .live{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+  /* LIVE is the healthy working state -> green. Red is reserved for actual
+     problems (.err), so a red pill always means "something needs fixing". */
+  .live{background:#dcfce7;color:#166534;border-color:#4ade80}
+  .err{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
   .dry{background:#e0f2fe;color:#075985;border-color:#7dd3fc}
   .auto{background:#dcfce7;color:#166534;border-color:#86efac}
   .manual{background:#fef3c7;color:#92400e;border-color:#fcd34d}
   .paused{background:#e5e7eb;color:#374151;border-color:#9ca3af}
-  @media (prefers-color-scheme:dark){.live{background:#3b1414;color:#fca5a5}.dry{background:#0c2a3a;color:#7dd3fc}.auto{background:#0f2a17;color:#86efac}.manual{background:#2a2109;color:#fcd34d}.paused{background:#242832;color:#cbd5e1}}
+  @media (prefers-color-scheme:dark){.live{background:#0f2a17;color:#86efac}.err{background:#3b1414;color:#fca5a5}.dry{background:#0c2a3a;color:#7dd3fc}.auto{background:#0f2a17;color:#86efac}.manual{background:#2a2109;color:#fcd34d}.paused{background:#242832;color:#cbd5e1}}
   .seg{display:inline-flex;gap:.25rem}
   .seg button{padding:.4rem .55rem}
   .badge{display:inline-block;padding:0 .4rem;border-radius:999px;background:var(--chip);color:var(--accent);font-size:.72rem;font-weight:600}
@@ -329,7 +332,7 @@ function makeApp() {
       const sendPill = PILLS[sendMode] || PILLS.manual;
       const gmailPill = gmailConnected
         ? '<span class="pill auto">Gmail ✓</span>'
-        : '<span class="pill live">Gmail not connected</span>';
+        : '<span class="pill err">Gmail not connected</span>';
       const modeBtn = (v, label, title) =>
         `<form method="post" action="/mode"><input type="hidden" name="value" value="${v}"><button class="${sendMode === v ? 'primary' : ''}" title="${title}">${label}</button></form>`;
       const modeCtl =
