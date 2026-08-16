@@ -153,6 +153,11 @@ can be made in writing. Three intents deliberately break that pattern and do not
   the name wrong is worse, not better.
 - Sending goes through `POST /reply/:id/send`, which honours dry mode and `screenReason()` but is
   *not* `sendOne()` — that refuses any lead with a response set, which is every replied lead.
+- **The operator edits plain text, never HTML.** `htmlToText()` renders the draft into the textarea
+  and `textToHtml()` converts it back on send; lines starting `- ` or `1. ` become real lists and bare
+  URLs are linked. The round trip is stable, and user text is HTML-escaped on the way back.
+- **`form{display:inline}` is global in `server.js`.** Any form holding stacked content needs
+  `class="stack"` or it gets no height and the next card renders on top of it.
 
 ### Guards are shared and defense-in-depth
 

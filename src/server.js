@@ -163,6 +163,10 @@ function shell(inner) {
   button.send{border-color:#10b98188;color:#059669;font-weight:600}
   button.send:hover{background:#10b9811a}
   form{display:inline}
+  /* Forms that hold real stacked content, not just a button. Without this the
+     global inline rule above leaves them with no height, and the next card
+     renders on top of them. */
+  form.stack{display:block}
   .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:.6rem;margin:.4rem 0 1rem}
   .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:.7rem .9rem}
   .tile .n{font-size:1.5rem;font-weight:700;line-height:1}
@@ -783,7 +787,7 @@ function makeApp() {
             <span class="muted" style="font-size:.8rem">- only the opening of a reply is captured, so check nothing important is further down</span></div>` : ''}
         </div>
 
-        <form method="get" action="/reply/${lead.id}" class="card" style="padding:1rem;max-width:820px;margin-top:1rem">
+        <form method="get" action="/reply/${lead.id}" class="card stack" style="padding:1rem;max-width:820px;margin-top:1rem">
           <b>🎯 Angle</b>
           <div class="muted" style="font-size:.85rem;margin:.3rem 0 .6rem">
             Read as: <b>${esc(d.label)}</b> - ${esc(d.why)}.
@@ -797,26 +801,26 @@ function makeApp() {
           </div>
         </form>
 
-        <form method="post" action="/reply/${lead.id}/send" class="card" style="padding:1rem;max-width:820px;margin-top:1rem"
+        <form method="post" action="/reply/${lead.id}/send" class="card stack" style="padding:1rem;max-width:820px;margin-top:1rem"
               onsubmit="return confirm('Send this reply to ${esc(lead.email)}?')">
           <b>✍️ Your reply</b>
-          <div class="muted" style="font-size:.8rem;margin:.3rem 0 .5rem">
-            To ${esc(lead.email)} &nbsp;·&nbsp; Subject: ${esc(d.subject)} &nbsp;·&nbsp; goes into the same Gmail thread.
-            Edit freely - this is HTML, and it is sent exactly as it stands here.
+          <div class="muted" style="font-size:.8rem;margin:.3rem 0 .6rem">
+            To ${esc(lead.email)} - goes into the same Gmail thread. Write it as a normal email;
+            bullet lines starting with <code>-</code> or <code>1.</code> become proper lists.
           </div>
-          <textarea name="html" rows="18" style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.78rem;line-height:1.5">${esc(d.html)}</textarea>
-          <input type="hidden" name="subject" value="${esc(d.subject)}">
+          <label style="display:block;font-size:.8rem;color:var(--muted)">Subject
+            <input name="subject" value="${esc(d.subject)}" style="width:100%;margin-top:.2rem">
+          </label>
+          <textarea name="text" rows="24" spellcheck="true"
+            style="width:100%;margin-top:.7rem;padding:.7rem;border:1px solid var(--line);border-radius:8px;
+                   background:var(--bg);color:var(--ink);font:inherit;line-height:1.6;resize:vertical"
+          >${esc(replydraft.htmlToText(d.html))}</textarea>
           ${guard ? `<div class="banner" style="margin:.6rem 0">⚠️ This lead trips a guard: <b>${esc(guard)}</b>. Sending is blocked.</div>` : ''}
-          <div style="margin-top:.6rem;display:flex;gap:.6rem;align-items:center">
+          <div style="margin-top:.7rem;display:flex;gap:.6rem;align-items:center">
             <button class="send" ${guard ? 'disabled' : ''}>✉ Send reply${dry ? ' (dry run - nothing will leave)' : ''}</button>
             <a href="/">Cancel</a>
           </div>
         </form>
-
-        <div class="card" style="padding:1rem;max-width:820px;margin-top:1rem">
-          <b>📋 Preview</b>
-          <div style="margin-top:.6rem;line-height:1.6">${d.html}</div>
-        </div>
       `));
     } catch (e) { return back(res, '⚠️ Could not draft a reply: ' + e.message); }
   });
@@ -831,8 +835,10 @@ function makeApp() {
       const guard = screenReason({ name: lead.name, email: lead.email, notes: lead.notes, topApp: lead.top_app });
       if (guard) return back(res, `⚠️ Not sent - this lead trips a guard: ${guard}`);
 
-      const html = String(req.body.html || '').trim();
-      if (!html) return back(res, '⚠️ Not sent - the reply was empty.');
+      // The operator writes plain text; it becomes email HTML here.
+      const text = String(req.body.text || '').trim();
+      if (!text) return back(res, '⚠️ Not sent - the reply was empty.');
+      const html = replydraft.textToHtml(text);
       const subject = String(req.body.subject || '').trim() || ('Re: ' + lead.name);
 
       if (await liveMode.isDry()) {

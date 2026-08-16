@@ -96,6 +96,86 @@ function reviewIsEasy() {
     `nothing for you to prepare.`;
 }
 
+/* -------------------------------------------------- plain text <-> email HTML */
+
+/**
+ * The operator edits the message, not the markup.
+ *
+ * Drafts are built as HTML because that is what gets sent, but nobody wants to
+ * write an email around <br> tags and inline styles. So the draft is converted
+ * to plain text for editing and converted back on send. Lists survive the round
+ * trip as "- " and "1. " lines, which is how people write them anyway.
+ */
+
+const ENTITIES = {
+  '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>',
+  '&quot;': '"', '&#39;': "'", '&apos;': "'"
+};
+
+function decodeEntities(s) {
+  return String(s).replace(/&(nbsp|amp|lt|gt|quot|#39|apos);/g, (m) => ENTITIES[m] || m);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+/** Email HTML -> plain text, for the editor. */
+function htmlToText(html) {
+  let s = String(html || '');
+  // Lists first, so numbering is preserved before the tags are stripped.
+  s = s.replace(/<(ul|ol)\b[^>]*>([\s\S]*?)<\/\1>/gi, (m, tag, inner) => {
+    let n = 0;
+    const body = inner.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (mm, li) => {
+      n++;
+      const prefix = tag.toLowerCase() === 'ol' ? `${n}. ` : '- ';
+      return '\n' + prefix + li.replace(/<[^>]+>/g, '').trim();
+    });
+    // Blank line after a list, or the next paragraph reads as part of it.
+    return '\n' + body + '\n\n';
+  });
+  s = s.replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1');   // keep the visible text
+  s = s.replace(/<br\s*\/?>/gi, '\n');
+  s = s.replace(/<[^>]+>/g, '');
+  return decodeEntities(s).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const URL_RE = /\b((?:https?:\/\/|www\.)[^\s<>"')]+[^\s<>"').,;:!?])/gi;
+
+function linkify(escaped) {
+  return escaped.replace(URL_RE, (u) => {
+    const href = /^www\./i.test(u) ? 'https://' + u : u;
+    return `<a href="${href}">${u}</a>`;
+  });
+}
+
+const UL_STYLE = 'margin:.4rem 0 .6rem 1.1rem;padding:0';
+const LI_STYLE = 'margin:.25rem 0';
+
+/** Plain text -> email HTML, on send. */
+function textToHtml(text) {
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let list = null;
+  const close = () => { if (list) { out.push(`</${list}>`); list = null; } };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    const ul = line.match(/^[-*•]\s+(.*)$/);
+    const ol = line.match(/^\d+[.)]\s+(.*)$/);
+    if (ul || ol) {
+      const want = ul ? 'ul' : 'ol';
+      if (list !== want) { close(); out.push(`<${want} style="${UL_STYLE}">`); list = want; }
+      out.push(`<li style="${LI_STYLE}">${linkify(escapeHtml((ul || ol)[1]))}</li>`);
+      continue;
+    }
+    close();
+    out.push(line ? linkify(escapeHtml(line)) + '<br>' : '<br>');
+  }
+  close();
+  return out.join('');
+}
+
 /* ------------------------------------------------------------ classification */
 
 // Ordered most-specific first: whoever matches first wins. "I'm not the owner
@@ -368,4 +448,7 @@ function intents() {
   return Object.keys(templates).map((intent) => ({ intent, label: labelFor(intent) }));
 }
 
-module.exports = { classify, draft, intents, ACCESS, QUESTIONS, diligenceRequest, labelFor };
+module.exports = {
+  classify, draft, intents, ACCESS, QUESTIONS, diligenceRequest, labelFor,
+  htmlToText, textToHtml
+};
