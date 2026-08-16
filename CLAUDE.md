@@ -120,6 +120,27 @@ nothing to do with.
   because it costs money per call. **Its request shape has not been verified against the live API** —
   the dev sandbox's egress policy blocks `api.apify.com`.
 
+### Answering a reply
+
+`src/replydraft.js` reads the reply and drafts a matching answer. Every draft aims at the same two
+outcomes in order: **get a call**, and failing that **get the app's numbers** so an indicative offer
+can be made in writing. Three intents deliberately break that pattern and do not push for a meeting:
+`not_selling`, `wrong_person`, `already_sold`.
+
+- **Classification is rule-based and ordered, first match wins** (same convention as `guards.js`).
+  Order matters: `wrong_person` must beat `interested` ("I'm not the owner but happy to chat") and
+  `not_selling` must beat `interested` ("not interested") and `price_first` ("Not for sale. How much
+  though?"). There are tests for exactly these traps.
+- **It classifies Gmail's *snippet*, not the full body** (capped at 500 chars in `email.js`). The
+  draft page shows the reply text and a link to the Gmail thread because of this.
+- Two ask-lists: `ASK_SHORT` (4 items) for lukewarm intents, `ASK_FULL` (10) for someone who asked
+  what we need. Four questions get answered; ten get postponed.
+- **The greeting only uses a `site`-verified contact name.** A name guessed from an email address
+  falls back to the studio, same rule as the cold email — this is now a real conversation, so getting
+  the name wrong is worse, not better.
+- Sending goes through `POST /reply/:id/send`, which honours dry mode and `screenReason()` but is
+  *not* `sendOne()` — that refuses any lead with a response set, which is every replied lead.
+
 ### Guards are shared and defense-in-depth
 
 `src/guards.js` exports one `screenReason(cand)` used by **both** sourcing and **every** send

@@ -12,6 +12,7 @@ const { screenReason } = require('./guards');
 const people = require('./people');
 const apify = require('./apify');
 const enrich = require('./enrich');
+const replydraft = require('./replydraft');
 const t = require('./time');
 
 function appList(l) {
@@ -356,9 +357,7 @@ function makeApp() {
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
         <td class="ell" title="${esc(l.reply_snippet)}">${l.reply_snippet
-          ? (l.reply_thread
-              ? `<a href="https://mail.google.com/mail/u/0/#inbox/${esc(l.reply_thread)}" target="_blank" rel="noopener">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
-              : `💬 ${esc(l.reply_snippet.slice(0, 60))}…`)
+          ? `<a href="/reply/${l.id}" title="Read it and draft an answer that matches what they said">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
           : ''}</td>
         <td class="muted">${esc(l.grp)}</td>
         <td style="white-space:nowrap">
@@ -421,6 +420,7 @@ function makeApp() {
           ${leads.filter((l) => l.response === R.respond && l.reply_snippet).slice(0, 5).map((l) => `
             <div style="margin-top:.5rem;padding:.5rem .7rem;background:#ffffff88;border-radius:8px">
               <b>${esc(l.name)}</b>${l.reply_subject ? ` <span style="opacity:.7">— ${esc(l.reply_subject)}</span>` : ''}
+              <a href="/reply/${l.id}" style="margin-left:.4rem;font-weight:600">✍️ Draft a reply →</a>
               ${l.reply_thread ? `<a href="https://mail.google.com/mail/u/0/#inbox/${esc(l.reply_thread)}" target="_blank" rel="noopener" style="margin-left:.4rem">open in Gmail →</a>` : ''}
               <div style="opacity:.85;font-style:italic;margin-top:.2rem">“${esc(l.reply_snippet)}”</div>
             </div>`).join('')}
@@ -753,6 +753,102 @@ function makeApp() {
     await db.updateLead(Number(req.params.id), { response: String(req.body.value || '') });
     res.redirect('/');
   });
+  // Draft an answer to a reply. The angle is chosen from what they actually
+  // wrote, but nothing is sent until a human has read and edited it.
+  app.get('/reply/:id', async (req, res) => {
+    try {
+      const r = await db.q('SELECT * FROM leads WHERE id = $1', [req.params.id]);
+      const lead = r.rows[0];
+      if (!lead) return res.status(404).send('Lead not found');
+
+      const chosen = String(req.query.intent || '');
+      const d = replydraft.draft(lead, lead.reply_snippet, chosen);
+      const dry = await liveMode.isDry();
+      const guard = screenReason({ name: lead.name, email: lead.email, notes: lead.notes, topApp: lead.top_app });
+
+      const options = replydraft.intents().map((i) =>
+        `<option value="${esc(i.intent)}" ${i.intent === d.intent ? 'selected' : ''}>${esc(i.label)}</option>`).join('');
+
+      res.send(shell(`
+        <p><a href="/">← Back to list</a></p>
+        <h1 style="font-size:1.2rem">Reply to ${esc(lead.name)}</h1>
+
+        <div class="card" style="padding:1rem;max-width:820px">
+          <b>💬 What they wrote</b>
+          ${lead.reply_subject ? `<div class="muted" style="margin-top:.3rem">${esc(lead.reply_subject)}</div>` : ''}
+          <div style="margin-top:.5rem;padding:.7rem;background:var(--surface-2,#f1f5f9);border-radius:6px;font-style:italic;line-height:1.6">
+            ${lead.reply_snippet ? esc(lead.reply_snippet) : '<span class="muted">Nothing was captured. Open the thread in Gmail and read it there.</span>'}
+          </div>
+          ${lead.reply_thread ? `<div style="margin-top:.5rem"><a href="https://mail.google.com/mail/u/0/#inbox/${esc(lead.reply_thread)}" target="_blank" rel="noopener">Open the full thread in Gmail →</a>
+            <span class="muted" style="font-size:.8rem">- only the opening of a reply is captured, so check nothing important is further down</span></div>` : ''}
+        </div>
+
+        <form method="get" action="/reply/${lead.id}" class="card" style="padding:1rem;max-width:820px;margin-top:1rem">
+          <b>🎯 Angle</b>
+          <div class="muted" style="font-size:.85rem;margin:.3rem 0 .6rem">
+            Read as: <b>${esc(d.label)}</b> - ${esc(d.why)}.
+            ${d.pushesForMeeting
+              ? 'The draft asks for a call first, and offers the numbers as the way out if they would rather not meet.'
+              : 'The draft deliberately does not push for a meeting here.'}
+          </div>
+          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+            <select name="intent">${options}</select>
+            <button>Re-draft with this angle</button>
+          </div>
+        </form>
+
+        <form method="post" action="/reply/${lead.id}/send" class="card" style="padding:1rem;max-width:820px;margin-top:1rem"
+              onsubmit="return confirm('Send this reply to ${esc(lead.email)}?')">
+          <b>✍️ Your reply</b>
+          <div class="muted" style="font-size:.8rem;margin:.3rem 0 .5rem">
+            To ${esc(lead.email)} &nbsp;·&nbsp; Subject: ${esc(d.subject)} &nbsp;·&nbsp; goes into the same Gmail thread.
+            Edit freely - this is HTML, and it is sent exactly as it stands here.
+          </div>
+          <textarea name="html" rows="18" style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.78rem;line-height:1.5">${esc(d.html)}</textarea>
+          <input type="hidden" name="subject" value="${esc(d.subject)}">
+          ${guard ? `<div class="banner" style="margin:.6rem 0">⚠️ This lead trips a guard: <b>${esc(guard)}</b>. Sending is blocked.</div>` : ''}
+          <div style="margin-top:.6rem;display:flex;gap:.6rem;align-items:center">
+            <button class="send" ${guard ? 'disabled' : ''}>✉ Send reply${dry ? ' (dry run - nothing will leave)' : ''}</button>
+            <a href="/">Cancel</a>
+          </div>
+        </form>
+
+        <div class="card" style="padding:1rem;max-width:820px;margin-top:1rem">
+          <b>📋 Preview</b>
+          <div style="margin-top:.6rem;line-height:1.6">${d.html}</div>
+        </div>
+      `));
+    } catch (e) { return back(res, '⚠️ Could not draft a reply: ' + e.message); }
+  });
+
+  app.post('/reply/:id/send', async (req, res) => {
+    try {
+      const r = await db.q('SELECT * FROM leads WHERE id = $1', [req.params.id]);
+      const lead = r.rows[0];
+      if (!lead) return back(res, '⚠️ Lead not found.');
+      if (!lead.email) return back(res, '⚠️ That lead has no email address.');
+
+      const guard = screenReason({ name: lead.name, email: lead.email, notes: lead.notes, topApp: lead.top_app });
+      if (guard) return back(res, `⚠️ Not sent - this lead trips a guard: ${guard}`);
+
+      const html = String(req.body.html || '').trim();
+      if (!html) return back(res, '⚠️ Not sent - the reply was empty.');
+      const subject = String(req.body.subject || '').trim() || ('Re: ' + lead.name);
+
+      if (await liveMode.isDry()) {
+        return back(res, `🧪 Dry run - nothing was sent. In LIVE this would reply to ${lead.email} in the existing thread.`);
+      }
+
+      await email.send({
+        to: lead.email, subject, html,
+        inReplyTo: lead.message_id || undefined,
+        threadId: lead.reply_thread || lead.thread_id || undefined
+      });
+      await db.logEvent(lead.id, 'reply_sent');
+      return back(res, `✉ Replied to ${lead.name} <${lead.email}> in the same thread.`);
+    } catch (e) { return back(res, '⚠️ Reply failed: ' + e.message); }
+  });
+
   app.post('/criteria', async (req, res) => {
     try {
       // checkboxes: an unticked box is absent from the body entirely
