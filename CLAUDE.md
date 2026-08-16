@@ -113,10 +113,18 @@ nothing to do with.
   domain, so enrichment has a domain to read. But `opportunityScore()` is passed the **listed site
   only**: "Play lists no website" is the solo-dev signal, and a domain we inferred is not evidence
   of one. Keep those two arguments distinct.
-- **`enrichFromSite` is opt-in** (criteria flag, like `scanReviews`) and wrapped in `try/catch` in
-  `refill.js` — enrichment failing must never break a sourcing run. It has its own daily fetch cap,
-  8s timeout, 1MB body cap, redirect cap and robots.txt check, because unlike AppStoreSpy these are
-  arbitrary third-party servers.
+- **`enrichFromSite` is ON by default** (criteria flag; set `ENRICH_FROM_SITE=false` to disable). The
+  studio's own site is where the LinkedIn link and the founder's name actually live, and reading it
+  costs no API credits. It is wrapped in `try/catch` in `refill.js` — enrichment failing must never
+  break a sourcing run — and has its own daily fetch cap, 8s timeout, 1MB body cap, redirect cap and
+  robots.txt check, because unlike AppStoreSpy these are arbitrary third-party servers.
+- **The crawl follows real links, it does not guess paths.** It reads the homepage, then queues the
+  same-origin About/Team/Contact links that page actually contains (`findInternalLinks`), falling
+  back to a short fixed list only when it finds none. That costs no 404s and catches `/our-story` or
+  `/about-tiimo`, which a fixed list never would. robots.txt is fetched **once per site**, and the
+  page budget counts *attempts* rather than successes so a one-page site cannot burn it on 404s.
+- **`findLinkedIn` prefers a `/in/` profile over a `/company/` page**, and trims subpaths — a footer
+  link to `linkedin.com/company/tiimo-aps/about/` is stored as the profile URL itself.
 - **Regexes in `enrich.js` must not carry the `/i` flag.** Capitalisation is the only thing
   separating a name from surrounding prose; `/i` makes `[A-Z]` match lowercase, which swallows the
   next word *and* backtracks catastrophically on a big page. Role keywords spell out their own case

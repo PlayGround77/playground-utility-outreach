@@ -23,9 +23,17 @@ const TIMEOUT_MS = 8000;
 const MAX_BYTES = 1024 * 1024;      // 1 MB - plenty for an About page
 const MAX_REDIRECTS = 3;
 const PAGES_PER_SITE = 4;           // homepage + up to 3 likely pages
-const DAILY_FETCH_CAP = 1500;
+// Enrichment runs on every sourced lead now, so the budget has to cover a full
+// refill (~250 leads) plus backfills, with room to spare.
+const DAILY_FETCH_CAP = 5000;
 
-const SUBPAGES = ['/about', '/about-us', '/team', '/contact', '/company'];
+// Fallback paths, tried only when the homepage links to nothing useful.
+const SUBPAGES = ['/about', '/team', '/contact'];
+
+// A page worth reading for a founder's name, matched on the link's own text or
+// its path. Following real links beats guessing paths: it costs no 404s and it
+// finds "/our-story" or "/about-tiimo", which a fixed list never would.
+const ABOUT_LINK = /\b(about|team|contact|company|our[- ]story|who[- ]we[- ]are|founders?|people|impressum)\b/i;
 
 let fetchesToday = 0;
 let fetchDay = '';
@@ -74,14 +82,16 @@ async function getPage(url, depth = 0) {
 }
 
 /**
- * Minimal robots.txt check for our own User-Agent and `*`.
- * Only honours Disallow lines, which is what matters for "may we read this".
- * A missing or unreadable robots.txt means allowed, per the standard.
+ * Fetch and parse robots.txt ONCE per site.
+ *
+ * Only Disallow lines matter for "may we read this". A missing or unreadable
+ * robots.txt means allowed, per the standard. Returns the list of disallowed
+ * prefixes that apply to us.
  */
-async function allowedByRobots(origin, path) {
+async function fetchRobots(origin) {
   let txt = '';
-  try { txt = await getPage(origin + '/robots.txt'); } catch (e) { return true; }
-  if (!txt) return true;
+  try { txt = await getPage(origin + '/robots.txt'); } catch (e) { return []; }
+  if (!txt) return [];
 
   let applies = false;
   const disallows = [];
@@ -97,7 +107,16 @@ async function allowedByRobots(origin, path) {
       disallows.push(val);
     }
   }
-  return !disallows.some((d) => path.startsWith(d));
+  return disallows;
+}
+
+function pathAllowed(disallows, path) {
+  return !(disallows || []).some((d) => path.startsWith(d));
+}
+
+/** Kept for direct exercise: one-shot check for a single path. */
+async function allowedByRobots(origin, path) {
+  return pathAllowed(await fetchRobots(origin), path);
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +175,31 @@ function findLinkedIn(html) {
   return clean.find((h) => /\/in\//i.test(h)) || clean[0] || '';
 }
 
+/**
+ * Same-origin links on a page that look like an About/Team/Contact page.
+ * Returns pathnames, best-looking first, deduped.
+ */
+function findInternalLinks(html, origin) {
+  const out = [];
+  const re = /<a\b[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]{0,120}?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(String(html || ''))) !== null && out.length < 12) {
+    const [, href, label] = m;
+    const text = label.replace(/<[^>]+>/g, ' ').trim();
+    let path;
+    try {
+      const u = new URL(href, origin);
+      if (u.origin !== origin) continue;               // never leave their site
+      path = u.pathname.replace(/\/+$/, '') || '/';
+    } catch (e) { continue; }
+    if (path === '/' || out.includes(path)) continue;
+    if (path.split('/').length > 3) continue;          // deep pages are not About pages
+    if (!ABOUT_LINK.test(text) && !ABOUT_LINK.test(path)) continue;
+    out.push(path);
+  }
+  return out;
+}
+
 /** Find a person name in page text, rejecting anything that reads as a company. */
 function findPersonName(text) {
   const hay = String(text || '').slice(0, MAX_SCAN_CHARS);
@@ -207,18 +251,21 @@ async function enrichFromSite(website) {
   const domain = base.hostname.replace(/^www\./i, '');
   const out = { ...empty };
 
-  const paths = [base.pathname && base.pathname !== '/' ? base.pathname : '/', ...SUBPAGES];
+  // Read robots.txt once for the whole site, not once per page.
+  let disallows = [];
+  try { disallows = await fetchRobots(origin); } catch (e) { disallows = []; }
+
+  const queue = [base.pathname && base.pathname !== '/' ? base.pathname : '/'];
   const seen = new Set();
+  let attempts = 0;      // count attempts, not successes: a site with no About
+                         // page must not burn the whole budget on 404s
+  let discovered = false;
 
-  for (const path of paths) {
-    if (out.pagesRead >= PAGES_PER_SITE) break;
-    if (seen.has(path)) continue;
+  while (queue.length && attempts < PAGES_PER_SITE && underFetchCap()) {
+    const path = queue.shift();
+    if (seen.has(path) || !pathAllowed(disallows, path)) continue;
     seen.add(path);
-    if (!underFetchCap()) break;
-
-    let allowed = true;
-    try { allowed = await allowedByRobots(origin, path); } catch (e) { allowed = true; }
-    if (!allowed) continue;
+    attempts++;
 
     const html = await getPage(origin + path);
     if (!html) continue;
@@ -230,6 +277,14 @@ async function enrichFromSite(website) {
     if (!out.email) out.email = findBetterEmail(text, domain);
 
     if (out.linkedin && out.contactName) break; // nothing better to find
+
+    // Queue the About/Team/Contact pages this site actually links to. Only from
+    // the first page we manage to read, so one link-heavy page cannot fan out.
+    if (!discovered) {
+      discovered = true;
+      const links = findInternalLinks(html, origin);
+      queue.push(...(links.length ? links : SUBPAGES));
+    }
   }
   return out;
 }
@@ -237,5 +292,5 @@ async function enrichFromSite(website) {
 module.exports = {
   enrichFromSite,
   // exported for direct exercise without network I/O
-  toText, findLinkedIn, findPersonName, findBetterEmail, allowedByRobots, underFetchCap
+  toText, findLinkedIn, findPersonName, findBetterEmail, allowedByRobots, findInternalLinks, underFetchCap
 };

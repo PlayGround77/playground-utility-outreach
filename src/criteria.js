@@ -36,7 +36,9 @@ function defaults() {
     minRatingCount: Number(process.env.MIN_RATING_COUNT) || 50,          // reliable rating
     maxApps: Number(process.env.MAX_APPS_PER_DEV) || 40,                 // avoid giant farms
     scanReviews: process.env.SCAN_REVIEWS === 'false' ? false : true,    // mine reviews for buy-signals (costs credits)
-    enrichFromSite: process.env.ENRICH_FROM_SITE === 'true',             // read the studio's own site for a person name + LinkedIn (free, but slow)
+    // On by default: the studio's own site is where the LinkedIn link and the
+    // founder's name actually live, and reading it costs no API credits.
+    enrichFromSite: process.env.ENRICH_FROM_SITE === 'false' ? false : true,
     dailyQuotaOverride: Number(process.env.DAILY_QUOTA_OVERRIDE) || 0,   // 0 = use the warm-up ramp; >0 = fixed emails/day
     revenueMax: config.appStoreSpy.revenueMaxPerMonth,
     maxPriority: Number(process.env.MAX_PRIORITY) || 100000000, // flag giants above this (priority = ipd × apps)
