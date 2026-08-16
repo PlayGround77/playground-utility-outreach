@@ -85,20 +85,36 @@ function contactCell(l) {
   return `<span title="${esc(why)}">${mark} ${esc(name)}</span>`;
 }
 
-// LinkedIn searches, not a resolved profile. If the studio published a profile
-// link on its own site we show that instead, because that one is actually known.
+// The LinkedIn wordmark, inline so it needs no external asset and inherits the
+// surrounding colour: brand blue when we have a real profile, muted when the
+// links below it are only searches.
+function liIcon(size) {
+  const s = size || 16;
+  return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="currentColor" aria-hidden="true" focusable="false" style="vertical-align:-.15em">
+    <path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.63-1.85 3.36-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.06 2.06 0 1 1 0-4.13 2.06 2.06 0 0 1 0 4.13zM7.12 20.45H3.55V9h3.57v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.72v20.56C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.72V1.72C24 .77 23.2 0 22.22 0z"/>
+  </svg>`;
+}
+
+// A profile the studio published on its own site is a real link. Everything
+// else is a set of searches, and is shown as such - a search dressed up as a
+// profile link is how you end up emailing the wrong person.
 function findPersonCell(l) {
   if (l.linkedin_url) {
-    return `<a href="${esc(l.linkedin_url)}" target="_blank" rel="noopener" title="LinkedIn profile the studio published on its own website - this one is verified">in ✅</a>`;
+    const isCompany = /\/company\//i.test(l.linkedin_url);
+    return `<a class="li li-on" href="${esc(l.linkedin_url)}" target="_blank" rel="noopener"
+      title="${isCompany ? 'Company page' : 'Profile'} linked from the studio's own website: ${esc(l.linkedin_url)}"
+      >${liIcon(16)}<span class="li-tick">✓</span></a>`;
   }
   const searches = people.linkedinSearches({
     contactName: l.contact_name, studio: l.name, appName: l.top_app, country: l.country
   });
   if (!searches.length) return '<span class="muted" title="Not enough signal to build a useful search">—</span>';
   const links = searches.map((s) =>
-    `<a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.why)}">${esc(s.label)}</a>`
-  ).join('<br>');
-  return `<details class="find"><summary title="Ready-made LinkedIn searches for this lead">🔍 ${searches.length}</summary><div class="findbox">${links}</div></details>`;
+    `<a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.why)}">${liIcon(13)} ${esc(s.label)}</a>`
+  ).join('');
+  return `<details class="find"><summary class="li li-off"
+      title="No LinkedIn found on their site. ${searches.length} ready-made searches - you pick the right person."
+      >${liIcon(16)}<span class="li-n">${searches.length}</span></summary><div class="findbox">${links}</div></details>`;
 }
 
 /* ---- status option lists + colors ---- */
@@ -191,9 +207,23 @@ function shell(inner) {
   details.find{position:relative}
   details.find>summary{cursor:pointer;list-style:none;white-space:nowrap}
   details.find>summary::-webkit-details-marker{display:none}
-  details.find .findbox{position:absolute;right:0;z-index:20;background:#fff;border:1px solid #d1d5db;
-    border-radius:6px;padding:.5rem .6rem;box-shadow:0 6px 18px rgba(0,0,0,.15);white-space:nowrap;font-size:.8rem;line-height:1.7}
-  details.find .findbox a{display:block}
+  /* Fixed, not absolute: the table wrapper computes to overflow-y:hidden, which
+     would clip this panel — badly for rows near the bottom, where it becomes
+     invisible and unclickable. Fixed escapes the clip; JS places it on open. */
+  /* Parked off-screen until JS places it, so an unpositioned fixed panel can
+     never nudge layout or trigger a scroll as it appears. */
+  details.find .findbox{position:fixed;left:-9999px;top:-9999px;z-index:60;background:var(--panel);color:var(--ink);
+    border:1px solid var(--line);border-radius:8px;padding:.5rem .6rem;
+    box-shadow:0 8px 24px rgba(0,0,0,.22);white-space:nowrap;font-size:.8rem;line-height:1.7}
+  details.find .findbox a{display:flex;align-items:center;gap:.35rem;padding:.12rem 0;color:#0A66C2}
+  /* LinkedIn marks. Blue = a profile they published; grey = searches only. */
+  .li{display:inline-flex;align-items:center;gap:.15rem;text-decoration:none}
+  .li-on{color:#0A66C2}
+  .li-on:hover{color:#004182}
+  .li-off{color:var(--muted)}
+  .li-off:hover{color:#0A66C2}
+  .li-tick{font-size:.7rem;color:#059669;font-weight:700}
+  .li-n{font-size:.7rem;font-weight:600}
   /* Pin the Studio (first) and Actions (last) columns so they stay on screen. */
   th:first-child,td:first-child{position:sticky;left:0;background:var(--panel);z-index:2;max-width:160px;overflow:hidden;text-overflow:ellipsis}
   th:last-child,td:last-child{position:sticky;right:0;background:var(--panel);z-index:2;box-shadow:-6px 0 6px -6px rgba(0,0,0,.25)}
@@ -231,6 +261,80 @@ function shell(inner) {
       if(moved) el.classList.remove('dragging');
       down=false; moved=false;
     });
+  });
+
+  // The LinkedIn search popovers are <details>, which stay open until clicked
+  // again. Close them the way a menu is expected to behave: on a click
+  // elsewhere, on Escape, and when the pointer leaves. Only one open at a time.
+  var openedAt = 0;   // when a panel was last opened, to tell apart the browser's
+                      // own scroll-into-view from a scroll the user performed
+  function closeAll(except){
+    document.querySelectorAll('details.find[open]').forEach(function(d){
+      if(d !== except) d.removeAttribute('open');
+    });
+  }
+  document.addEventListener('click', function(e){
+    var t = e.target;
+    // SVG children carry closest(); anything else that does not is outside.
+    var inside = (t && typeof t.closest === 'function') ? t.closest('details.find') : null;
+    // Stamp synchronously, here in the click. The toggle event fires
+    // asynchronously, so a scroll landing in between would otherwise look like
+    // a user scroll and close the panel the instant it opened.
+    if(inside) openedAt = Date.now();
+    closeAll(inside);
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape') closeAll(null);
+  });
+  // Close shortly after the pointer leaves, with a grace period so crossing the
+  // gap between the icon and the panel does not shut it. Mouse only: on a touch
+  // screen there is no hover, and a stray mouseleave would close the panel the
+  // instant it opened - there, the click-elsewhere rule above does the job.
+  if (window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+    document.querySelectorAll('details.find').forEach(function(d){
+      var t = null;
+      d.addEventListener('mouseleave', function(){
+        clearTimeout(t);
+        t = setTimeout(function(){ d.removeAttribute('open'); }, 400);
+      });
+      d.addEventListener('mouseenter', function(){ clearTimeout(t); });
+    });
+  }
+  // Scrolling the table sideways would leave the panel floating over unrelated
+  // rows, so close on scroll - but NOT the scroll the browser performs to bring
+  // the icon into view when you click it, which would shut the panel the moment
+  // it opened.
+  // Place the fixed panel under its icon, kept inside the viewport. Flips above
+  // the icon when there is no room below, so bottom rows still show it fully.
+  function place(d){
+    var box = d.querySelector('.findbox');
+    if(!box) return;
+    box.style.visibility = 'hidden';
+    box.style.left = '0px'; box.style.top = '0px';
+    var r = d.getBoundingClientRect();
+    var bw = box.offsetWidth, bh = box.offsetHeight, pad = 8;
+    var left = Math.min(Math.max(pad, r.right - bw), window.innerWidth - bw - pad);
+    var top = r.bottom + 4;
+    if(top + bh > window.innerHeight - pad) top = Math.max(pad, r.top - bh - 4);
+    box.style.left = left + 'px';
+    box.style.top = top + 'px';
+    box.style.visibility = '';
+  }
+  document.addEventListener('toggle', function(e){
+    var d = e.target;
+    if(!d.matches || !d.matches('details.find')) return;
+    if(!d.hasAttribute('open')) return;
+    openedAt = Date.now();
+    place(d);
+  }, true);
+  window.addEventListener('resize', function(){ closeAll(null); });
+  window.addEventListener('scroll', function(){
+    if(Date.now() - openedAt > 500) closeAll(null);
+  }, { passive: true });
+  document.querySelectorAll('.wrap').forEach(function(el){
+    el.addEventListener('scroll', function(){
+      if(Date.now() - openedAt > 500) closeAll(null);
+    }, { passive: true });
   });
 })();
 </script>
@@ -606,7 +710,7 @@ function makeApp() {
             (${cov.name_verified} of those verified from the studio site),
             ${cov.with_linkedin} with a LinkedIn URL, ${cov.with_country} with a country.
             Check these numbers before paying for external enrichment: if the free steps already cover most leads, there is nothing to buy.<br>
-            <b>Find:</b> opens ready-made LinkedIn <i>searches</i> for this lead — by name + studio, by name + country, by app name (developers often list their own app in their profile), and by studio + role. These are searches, not verified profiles: you pick the right person. <b>in ✅</b> appears instead when the studio published its own LinkedIn link, which is the one case where the profile is known rather than guessed.<br>
+            <b>LinkedIn:</b> a <span style="color:#0A66C2;font-weight:600">blue</span> icon is a real link — a profile or company page the studio published on its own website, found while reading their site. A <span class="muted" style="font-weight:600">grey</span> icon means nothing was found there, and opens ready-made <i>searches</i> for this lead — by name + studio, by name + country, by app name (developers often list their own app in their profile), and by studio + role. Those are searches, not verified profiles: you pick the right person.<br>
             <b>View:</b> quick presets (e.g. "Queue" = never contacted yet). <b>Search:</b> matches Studio/App/Category/Email. <b>OS:</b> Android vs iOS (only Android is sourced today).<br>
             <b>More column filters:</b> set any combination of numeric ranges/statuses above and click Apply — they combine with View and Search.
           </div>
@@ -622,7 +726,7 @@ function makeApp() {
             <th>Email</th><th>Store</th><th title="The studio's own website, when Google Play lists one. Blank is itself a signal — solo devs often have none.">Site</th>
             <th title="The person behind the app. ✅ was read off the studio's own site; ~ was guessed from the email address and is unverified.">Contact</th>
             <th title="Where the studio is based (AppStoreSpy hq_country). Narrows down a common name on LinkedIn.">Country</th>
-            <th title="Opens ready-made LinkedIn searches for this lead — by name, by studio, and by app name. These are searches, not verified profiles: you pick the right person.">Find</th>
+            <th title="A blue LinkedIn icon is a profile the studio published on its own website — a real link. A grey one opens ready-made searches instead, because nothing was found: those are searches, not verified profiles.">LinkedIn</th>
             <th>Outreach status</th><th>Response status</th><th title="What the lead actually wrote back (hover for more, or open the thread in Gmail)">Reply</th><th>Group</th><th></th>
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="21" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
@@ -756,8 +860,9 @@ function makeApp() {
               : '<span class="muted">not found</span>'}</div>
             <div><b>Website:</b> ${lead.website ? `<a href="${esc(lead.website)}" target="_blank" rel="noopener">${esc(lead.website)}</a>` : '<span class="muted">none</span>'}</div>
             <div><b>LinkedIn:</b> ${lead.linkedin_url
-              ? `<a href="${esc(lead.linkedin_url)}" target="_blank" rel="noopener">${esc(lead.linkedin_url)}</a>`
-              : '<span class="muted">not resolved - use a search below</span>'}</div>
+              ? `<a class="li li-on" href="${esc(lead.linkedin_url)}" target="_blank" rel="noopener" style="gap:.3rem">${liIcon(15)} ${esc(lead.linkedin_url.replace(/^https?:\/\/(www\.)?/, ''))}</a>
+                 <span class="muted" style="font-size:.8rem">- linked from their own website</span>`
+              : '<span class="muted">nothing found on their site - use a search below</span>'}</div>
           </div>
           ${(() => {
             const searches = people.linkedinSearches({
@@ -766,7 +871,7 @@ function makeApp() {
             if (!searches.length) return '';
             return `<div style="margin-top:.7rem;padding-top:.7rem;border-top:1px solid var(--line)">
               <div class="muted" style="font-size:.8rem;margin-bottom:.3rem">Search LinkedIn - each angle finds a different kind of match, and you decide which hit is the right person:</div>
-              ${searches.map((s) => `<div><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a> <span class="muted" style="font-size:.78rem">- ${esc(s.why)}</span></div>`).join('')}
+              ${searches.map((s) => `<div style="margin:.2rem 0"><a class="li li-off" href="${esc(s.url)}" target="_blank" rel="noopener" style="gap:.3rem">${liIcon(14)} ${esc(s.label)}</a> <span class="muted" style="font-size:.78rem">- ${esc(s.why)}</span></div>`).join('')}
             </div>`;
           })()}
           <div style="margin-top:.7rem">

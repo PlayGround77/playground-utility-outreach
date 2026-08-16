@@ -198,6 +198,23 @@ can be made in writing. Three intents deliberately break that pattern and do not
 - **`form{display:inline}` is global in `server.js`.** Any form holding stacked content needs
   `class="stack"` or it gets no height and the next card renders on top of it.
 
+### The LinkedIn column
+
+A **blue** LinkedIn icon is a real link — a profile or company page found on the studio's own site.
+A **grey** one means nothing was found and opens ready-made searches instead. Never render a search
+as if it were a resolved profile.
+
+- **`.findbox` must be `position:fixed`, not `absolute`.** The table wrapper computes to
+  `overflow-y:hidden`, which clips an absolutely-positioned panel — invisible *and unclickable* for
+  rows low in the table. It is parked off-screen in CSS and placed by `place()` on open, flipping
+  above the icon when there is no room below.
+- **`openedAt` is stamped in the click handler, not in `toggle`.** `toggle` on `<details>` fires
+  *asynchronously*, so the browser's own scroll-into-view lands first and would read as a user
+  scroll, closing the panel the instant it opened.
+- Closing is click-outside, Escape, table/window scroll, and (mouse only, behind a
+  `(hover: hover)` check) 400ms after the pointer leaves — a touch device has no hover, and a stray
+  `mouseleave` there would shut the panel immediately.
+
 ### Guards are shared and defense-in-depth
 
 `src/guards.js` exports one `screenReason(cand)` used by **both** sourcing and **every** send
