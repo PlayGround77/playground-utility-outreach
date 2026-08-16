@@ -268,6 +268,9 @@ function makeApp() {
       const blankNameCount = leads.filter((l) => !String(l.name || '').trim()).length;
       // How much contact detail we actually hold — this is the number that says
       // whether paying for external enrichment is worth it yet.
+      // Status only — the keys themselves never reach the page.
+      const aiKey = await ai.keyStatus();
+      const apifyKey = await apify.keyStatus();
       const cov = await db.contactCoverage();
       cov.needs_enrich = leads.filter((l) =>
         String(l.website || '').trim() &&
@@ -461,6 +464,53 @@ function makeApp() {
           ${tile(st.closed, 'Closed')}
           ${tile(st.blocked, 'Blocked')}
         </div>
+
+        <details class="crit"${aiKey.set ? '' : ' open'}>
+          <summary>🔑 API keys — ${aiKey.set
+            ? `Claude connected <span class="muted" style="font-weight:400">(${esc(aiKey.hint)}, from ${aiKey.source === 'dashboard' ? 'this dashboard' : 'Railway'})</span>`
+            : '<span style="color:#b45309">Claude not connected — replies fall back to templates</span>'}</summary>
+
+          <p class="muted" style="font-size:.85rem;margin:.5rem 0">
+            Keys are stored in the database and take effect immediately — no redeploy.
+            They are write-only here: once saved, only the last four characters are ever shown again.
+            A key saved on this page overrides the matching Railway variable.
+          </p>
+
+          <form method="post" action="/keys" class="stack" style="margin-bottom:.9rem">
+            <input type="hidden" name="which" value="anthropic">
+            <label style="display:block;font-size:.8rem;color:var(--muted)">
+              Anthropic API key — writes the reply to every lead who answers.
+              Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
+              <input name="key" type="password" autocomplete="off" spellcheck="false"
+                     placeholder="${aiKey.set ? 'Saved (' + esc(aiKey.hint) + ') — type a new key to replace it' : 'sk-ant-…'}"
+                     style="width:100%;margin-top:.2rem">
+            </label>
+            <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.5rem">
+              <button class="primary">Save key</button>
+              ${aiKey.set ? `<button formaction="/keys/test" title="Spends a few tokens on a one-word request to prove the key works">🧪 Test it</button>
+                <button formaction="/keys/clear" onclick="return confirm('Remove the saved Anthropic key? Replies will fall back to templates.')">Remove</button>` : ''}
+            </div>
+            ${aiKey.shadowsEnv ? `<div class="muted" style="font-size:.78rem;margin-top:.4rem">
+              Note: <code>ANTHROPIC_API_KEY</code> is also set in Railway but is <b>not</b> being used — the key saved here wins. Remove this one to fall back to it.</div>` : ''}
+          </form>
+
+          <form method="post" action="/keys" class="stack">
+            <input type="hidden" name="which" value="apify">
+            <label style="display:block;font-size:.8rem;color:var(--muted)">
+              Apify token <span style="opacity:.8">(optional)</span> — automatic LinkedIn lookup. Costs money per lookup.
+              ${apifyKey.set ? `<b>Saved</b> (${esc(apifyKey.hint)}, from ${apifyKey.source === 'dashboard' ? 'this dashboard' : 'Railway'}).` : 'Not set — the 🔍 Find searches still work by hand.'}
+              <input name="key" type="password" autocomplete="off" spellcheck="false"
+                     placeholder="${apifyKey.set ? 'Saved — type a new token to replace it' : 'apify_api_…'}"
+                     style="width:100%;margin-top:.2rem">
+            </label>
+            <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.5rem">
+              <button>Save token</button>
+              ${apifyKey.set ? `<button formaction="/keys/clear" onclick="return confirm('Remove the saved Apify token?')">Remove</button>` : ''}
+            </div>
+            ${apifyKey.shadowsEnv ? `<div class="muted" style="font-size:.78rem;margin-top:.4rem">
+              Note: <code>APIFY_TOKEN</code> is also set in Railway but is <b>not</b> being used — the token saved here wins.</div>` : ''}
+          </form>
+        </details>
 
         <details class="crit">
           <summary>🔎 Search criteria — edit &amp; save; affects the next “Source now”</summary>
@@ -887,6 +937,50 @@ function makeApp() {
       await db.logEvent(lead.id, 'reply_sent');
       return back(res, `✉ Replied to ${lead.name} <${lead.email}> in the same thread.`);
     } catch (e) { return back(res, '⚠️ Reply failed: ' + e.message); }
+  });
+
+  // API keys. Stored in `settings` like every other runtime value, so adding one
+  // takes effect on the next request rather than needing a Railway redeploy.
+  const KEY_TARGETS = {
+    anthropic: { mod: ai, label: 'Anthropic API key', prefix: /^sk-ant-/ },
+    apify: { mod: apify, label: 'Apify token', prefix: /^apify_api_/ }
+  };
+
+  app.post('/keys', async (req, res) => {
+    const t = KEY_TARGETS[String(req.body.which || '')];
+    if (!t) return back(res, '⚠️ Unknown key.');
+    const key = String(req.body.key || '').trim();
+    if (!key) return back(res, `⚠️ Nothing saved - the ${t.label} field was empty.`);
+    // A wrong-service paste is the most likely mistake, and it would otherwise
+    // only surface later as a confusing auth failure.
+    if (!t.prefix.test(key)) {
+      return back(res, `⚠️ That does not look like an ${t.label} - it should start with "${t.prefix.source.replace(/[\^\\]/g, '')}".`);
+    }
+    try {
+      await t.mod.setKey(key);
+      return back(res, `🔑 ${t.label} saved (…${key.slice(-4)}). It is in use from now on.`);
+    } catch (e) { return back(res, `⚠️ Could not save the ${t.label}: ${e.message}`); }
+  });
+
+  app.post('/keys/clear', async (req, res) => {
+    const t = KEY_TARGETS[String(req.body.which || '')];
+    if (!t) return back(res, '⚠️ Unknown key.');
+    try {
+      await t.mod.setKey('');
+      const now = await t.mod.keyStatus();
+      return back(res, now.set
+        ? `🔑 ${t.label} removed here - falling back to the Railway variable.`
+        : `🔑 ${t.label} removed.`);
+    } catch (e) { return back(res, `⚠️ Could not remove the ${t.label}: ${e.message}`); }
+  });
+
+  app.post('/keys/test', async (req, res) => {
+    try {
+      const r = await ai.testKey();
+      return back(res, r.ok
+        ? `✅ Claude is working - ${esc(r.model)} replied "${esc(r.said)}". Replies will be written by AI from now on.`
+        : `❌ Claude did not answer: ${esc(r.error)}`);
+    } catch (e) { return back(res, '❌ Test failed: ' + e.message); }
   });
 
   app.post('/criteria', async (req, res) => {

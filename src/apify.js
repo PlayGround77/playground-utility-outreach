@@ -33,11 +33,29 @@ const BASE = 'https://api.apify.com/v2/acts/';
 const TIMEOUT_MS = 120000;   // actor runs are not instant
 const DAILY_CAP = 200;       // hard backstop on spend
 
-/** Token comes from the environment, or from settings (dashboard-editable). */
+const KEY_SETTING = 'apify_token';
+
+/** Same precedence as everywhere else: a dashboard-saved value beats the env var. */
 async function token() {
+  const fromDb = String(await db.getSetting(KEY_SETTING, '')).trim();
+  if (fromDb) return fromDb;
+  return String(process.env.APIFY_TOKEN || '').trim();
+}
+
+async function keyStatus() {
+  const fromDb = String(await db.getSetting(KEY_SETTING, '')).trim();
   const fromEnv = String(process.env.APIFY_TOKEN || '').trim();
-  if (fromEnv) return fromEnv;
-  return String(await db.getSetting('apify_token', '')).trim();
+  const inUse = fromDb || fromEnv;
+  return {
+    set: !!inUse,
+    source: fromDb ? 'dashboard' : (fromEnv ? 'env' : ''),
+    shadowsEnv: !!fromDb && !!fromEnv,
+    hint: inUse ? '…' + inUse.slice(-4) : ''
+  };
+}
+
+async function setKey(value) {
+  await db.setSetting(KEY_SETTING, String(value || '').trim());
 }
 
 async function enabled() {
@@ -164,4 +182,4 @@ async function findProfiles(lead) {
   }
 }
 
-module.exports = { findProfiles, parseResults, scoreCandidate, runSearch, enabled, DAILY_CAP };
+module.exports = { findProfiles, parseResults, scoreCandidate, runSearch, enabled, keyStatus, setKey, DAILY_CAP };

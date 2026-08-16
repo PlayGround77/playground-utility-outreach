@@ -58,6 +58,14 @@ dashboard, so changing behavior never requires a redeploy:
 | `send_mode` | read inline | `paused` \| `manual` \| `auto` |
 | `criteria` (JSON) | `src/criteria.js` | all search criteria + `dailyQuotaOverride` |
 | `last_watch_run` / `last_watch_status` | `src/jobs/replywatcher.js` | proof the reply scan actually ran |
+| `anthropic_api_key` / `apify_token` | `src/ai.js` / `src/apify.js` | API keys, saved from the dashboard |
+
+**API keys follow the same precedence as every other setting: a key saved in the dashboard beats the
+env var.** `keyStatus()` reports which one is live and flags `shadowsEnv` when a Railway variable is
+being silently overridden. Keys are write-only in the UI — only the last four characters are ever
+rendered back. `POST /keys` validates the prefix (`sk-ant-` / `apify_api_`) so a wrong-service paste
+fails immediately instead of surfacing later as an auth error, and `POST /keys/test` spends a few
+tokens on a one-word request to prove the key actually works.
 
 **Never read `config.DRY_RUN` directly** — always `await liveMode.isDry()`. Likewise `dailyQuota()`
 in `src/jobs/sender.js` is **async** (it consults the criteria override before the warm-up ramp).

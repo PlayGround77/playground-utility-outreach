@@ -37,15 +37,66 @@ const MAX_TOKENS = 4000;
 const TIMEOUT_MS = 60000;
 const MAX_RETRIES = 1;
 
-/** Key from the environment, or from settings so it can be set in the dashboard. */
+const KEY_SETTING = 'anthropic_api_key';
+
+/**
+ * A key saved from the dashboard wins over the environment variable.
+ *
+ * That is the same precedence as every other setting in this app (see
+ * livemode.js): env vars are first-boot defaults, the settings table is
+ * authoritative, and changing behaviour never needs a redeploy. The dashboard
+ * says which of the two is actually in use, because a key that silently loses
+ * to a stale Railway variable is a genuinely confusing failure.
+ */
 async function apiKey() {
-  const fromEnv = String(process.env.ANTHROPIC_API_KEY || '').trim();
-  if (fromEnv) return fromEnv;
-  return String(await db.getSetting('anthropic_api_key', '')).trim();
+  const fromDb = String(await db.getSetting(KEY_SETTING, '')).trim();
+  if (fromDb) return fromDb;
+  return String(process.env.ANTHROPIC_API_KEY || '').trim();
 }
 
 async function isEnabled() {
   return !!(await apiKey());
+}
+
+/** Show a key without revealing it: source, and the last four characters. */
+async function keyStatus() {
+  const fromDb = String(await db.getSetting(KEY_SETTING, '')).trim();
+  const fromEnv = String(process.env.ANTHROPIC_API_KEY || '').trim();
+  const inUse = fromDb || fromEnv;
+  return {
+    set: !!inUse,
+    source: fromDb ? 'dashboard' : (fromEnv ? 'env' : ''),
+    // Both present is worth surfacing: the dashboard one wins and the Railway
+    // variable is doing nothing.
+    shadowsEnv: !!fromDb && !!fromEnv,
+    hint: inUse ? '…' + inUse.slice(-4) : ''
+  };
+}
+
+async function setKey(value) {
+  await db.setSetting(KEY_SETTING, String(value || '').trim());
+}
+
+/**
+ * Spend a few tokens proving the key actually works.
+ * The wire format is verified by tests, but only a real call proves the key is
+ * valid, the model is reachable, and the account has credit.
+ */
+async function testKey() {
+  const key = await apiKey();
+  if (!key) return { ok: false, error: 'no key set' };
+  try {
+    const client = new Anthropic({ apiKey: key, timeout: 30000, maxRetries: 1 });
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Reply with the single word: OK' }]
+    });
+    const text = (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+    return { ok: true, model: res.model || MODEL, said: text.slice(0, 40) };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
 }
 
 async function underCap() {
@@ -244,4 +295,7 @@ function sanitize(body) {
     .trim();
 }
 
-module.exports = { draftReply, isEnabled, systemPrompt, leadContext, threadBlock, sanitize, MODEL, DAILY_CAP };
+module.exports = {
+  draftReply, isEnabled, keyStatus, setKey, testKey,
+  systemPrompt, leadContext, threadBlock, sanitize, MODEL, DAILY_CAP, KEY_SETTING
+};
