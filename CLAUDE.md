@@ -133,8 +133,21 @@ can be made in writing. Three intents deliberately break that pattern and do not
   though?"). There are tests for exactly these traps.
 - **It classifies Gmail's *snippet*, not the full body** (capped at 500 chars in `email.js`). The
   draft page shows the reply text and a link to the Gmail thread because of this.
-- Two ask-lists: `ASK_SHORT` (4 items) for lukewarm intents, `ASK_FULL` (10) for someone who asked
-  what we need. Four questions get answered; ten get postponed.
+- **The ask is for view-only console access, not for a data pack.** `diligenceRequest()` asks them to
+  invite us to App Store Connect / Play Console / RevenueCat / ad accounts and says "there's nothing
+  for you to prepare" — we pull the numbers ourselves. Only the four things access *cannot* show
+  (costs, paid growth, who owns the code, why they're selling) are asked as questions. This is the
+  owner's own copy and the wording is deliberate: homework gets postponed, four console invites get
+  done the same evening. It also gets us the real numbers rather than their summary of them.
+- **The ask is graduated.** Full request for `interested` / `price_first` / `send_info` /
+  `already_in_talks` / `unclear`; only the one-line `reviewIsEasy()` framing for `who_are_you` and
+  `later`, where asking for console access too early would kill it; nothing at all for the three
+  no-push intents.
+- **Replies sign off as `brand.legalName`** (`LEGAL_NAME`, default "Playground Studio LLC"), not with
+  `ownerTitle` — "Publishing Manager" is a leftover from the old publishing pitch and contradicts an
+  acquisition offer. `templates.js` (the cold emails) still uses the old signature.
+- `meetingAsk()` lowercases its continuation when the lead-in ends in a comma, so a custom lead-in
+  does not produce "...talk it through, Send me a couple of times".
 - **The greeting only uses a `site`-verified contact name.** A name guessed from an email address
   falls back to the studio, same rule as the cold email — this is now a real conversation, so getting
   the name wrong is worse, not better.

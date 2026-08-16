@@ -33,32 +33,67 @@ const config = require('./config');
 
 /* ------------------------------------------------------------------ asking */
 
-// What we need to value an app. The short list is what goes to someone who is
-// lukewarm: four questions is answerable in one sitting, ten is a chore that
-// gets postponed forever. The full list goes to someone who asked what we need.
-const ASK_SHORT = [
-  'Revenue for the last 12 months, split by source (in-app purchases, subscriptions, ads)',
-  'Installs and current active users (daily and monthly)',
-  'Monthly running costs - servers, third-party services, any licences',
-  'Roughly how many hours a month it takes to keep it running, and who does that'
+/**
+ * The diligence request.
+ *
+ * The important move here is that we ask for *view-only access* rather than
+ * asking the seller to assemble a data pack. It removes almost all the work
+ * from their side ("nothing for you to prepare"), it gets us the real numbers
+ * instead of their summary of the numbers, and it is what an acquirer that has
+ * done this before sounds like. A homework assignment gets postponed; four
+ * console invites get done the same evening.
+ */
+const ACCESS = [
+  'App Store Connect - "Sales" role',
+  'Google Play Console - this app only, with view app info / financial data / app quality',
+  'RevenueCat or Adapty, or whatever you use for subscriptions - read only',
+  'Your ad accounts, if you\'re running any'
 ];
 
-const ASK_FULL = [
-  'Revenue for the last 12 months, split by source (in-app purchases, subscriptions, ads)',
-  'Installs for the last 12 months, and current daily and monthly active users',
-  'Retention - day 1, day 7 and day 30 if you have it',
-  'Where the traffic comes from: organic versus paid, and any current ad spend',
-  'Monthly running costs - servers, third-party services, any licences',
-  'Roughly how many hours a month it takes to keep it running, and who does that',
-  'A screenshot or CSV export from Play Console / App Store Connect covering the above',
-  'Account standing - any policy strikes, warnings or appeals, past or open',
-  'What would be included in a sale: source code, assets, the developer account, the app name and any trademark',
-  'What kind of price you have in mind'
+// Only the things access cannot show us. Everything answerable from a console
+// is deliberately absent, which is what keeps this to four questions.
+const QUESTIONS = [
+  'What are your monthly costs - API, hosting, anything recurring?',
+  'Is any of the growth paid? If so, what\'s the monthly spend?',
+  'Who legally owns the code and the assets?',
+  'What\'s the reason for selling?'
 ];
 
-function askList(items) {
-  return '<ul style="margin:.4rem 0 .4rem 1.1rem;padding:0">' +
+function bullets(items) {
+  return '<ul style="margin:.4rem 0 .6rem 1.1rem;padding:0">' +
     items.map((i) => `<li style="margin:.25rem 0">${i}</li>`).join('') + '</ul>';
+}
+function numbered(items) {
+  return '<ol style="margin:.4rem 0 .6rem 1.1rem;padding:0">' +
+    items.map((i) => `<li style="margin:.25rem 0">${i}</li>`).join('') + '</ol>';
+}
+
+/** The full "let us take a proper look" block. */
+function diligenceRequest(opts) {
+  const o = opts || {};
+  const invite = config.brand.ownerEmail || 'us';
+  const opener = o.opener ||
+    'We\'d like to move forward and take a proper look at the app.';
+  return (
+    `${opener}<br><br>` +
+    `Our review is quick - we usually come back with a number within a week. ` +
+    `The easiest way to do it is view-only access, so there's nothing for you to prepare. ` +
+    `We pull the numbers ourselves.<br><br>` +
+    `If you can invite ${invite} to these, that covers most of it:` +
+    bullets(ACCESS) +
+    `Nothing sensitive at this stage - no keys, no passwords, no ownership changes. ` +
+    `That all comes later, and only if we sign.<br><br>` +
+    `Then just four quick questions:` +
+    numbered(QUESTIONS) +
+    `Happy to sign an NDA before any of this - say the word and we'll send one over today.`
+  );
+}
+
+/** A one-line version for leads who are not ready for the full ask yet. */
+function reviewIsEasy() {
+  return `For what it's worth, our review is view-only and takes about a week - ` +
+    `we get read access to the consoles and pull the numbers ourselves, so there's ` +
+    `nothing for you to prepare.`;
 }
 
 /* ------------------------------------------------------------ classification */
@@ -168,49 +203,43 @@ function meetingAsk(lineIn) {
   const url = config.brand.calendarUrl;
   const has = url && String(url).indexOf('<<') === -1 && String(url).trim() !== '';
   const line = lineIn || 'Would a quick 15 minutes work?';
-  return has
-    ? `${line} You can grab a slot straight from my calendar here: <a href="${url}">${url}</a>`
-    : `${line} Send me a couple of times that suit you and I'll work around them.`;
-}
-
-/** The fallback ask: if they will not meet, get the numbers instead. */
-function dataFallback(items) {
-  return 'If you would rather not get on a call, that is completely fine - just send these over ' +
-    'and I can come back with an indicative number in writing:' + askList(items || ASK_SHORT);
+  // A lead-in ending in a comma is the first half of a sentence, so the rest has
+  // to continue it in lower case. Otherwise we get "...talk it through, Send me
+  // a couple of times", which reads like two sentences glued together.
+  const cont = /,\s*$/.test(line);
+  const tail = has
+    ? `you can grab a slot straight from my calendar here: <a href="${url}">${url}</a>`
+    : `send me a couple of times that suit you and I'll work around them.`;
+  return `${line} ${cont ? tail : tail.charAt(0).toUpperCase() + tail.slice(1)}`;
 }
 
 const templates = {
   interested(lead) {
     return `${greeting(lead)}<br><br>` +
       `That's great to hear, thank you for coming back to me.<br><br>` +
-      `The quickest way forward is a short call: I'll tell you how we value an app like ` +
-      `${appName(lead)}, what the process looks like, and you can decide if it's worth ` +
-      `taking further. No obligation either way.<br><br>` +
-      meetingAsk('Would a quick 15 minutes this week or next work?') + '<br><br>' +
-      `So the call is useful rather than exploratory, it helps if I have these in advance:` +
-      askList(ASK_SHORT);
+      meetingAsk('Would a quick 15 minutes this week or next work? I\'ll walk you through how we ' +
+        'value an app like ' + appName(lead) + ' and what the process looks like, with no obligation either way.') +
+      `<br><br>` +
+      `If you'd rather skip the call and just get to a number, that works too. ` +
+      diligenceRequest({ opener: 'We can start the review straight away.' });
   },
 
   price_first(lead) {
     return `${greeting(lead)}<br><br>` +
-      `Fair question, and I'd rather give you a real number than a made-up one.<br><br>` +
-      `What an app like ${appName(lead)} is worth comes down to a few things I can't see from ` +
-      `the outside - how the revenue is actually made up, how users retain, and how much of the ` +
-      `traffic is organic. Send me these and I'll come back with an indicative range in writing:` +
-      askList(ASK_SHORT) +
-      `<br>Or if it's easier, give me 15 minutes on a call and I'll walk you through how we get ` +
-      `to a number, so you can judge whether we're in the right area at all.<br><br>` +
-      meetingAsk('');
+      `Fair question, and I'd rather give you a real number than a made-up one. ` +
+      `Here's how we get to it.<br><br>` +
+      diligenceRequest({
+        opener: 'We\'d like to take a proper look at ' + appName(lead) + ' and come back with a figure.'
+      }) +
+      `<br><br>` + meetingAsk('If you\'d rather talk it through first,');
   },
 
   send_info(lead) {
+    // They asked what we need, so answer it and nothing else - an extra
+    // preamble in front of "here is exactly what we need" only delays it.
     return `${greeting(lead)}<br><br>` +
-      `Thanks - here's exactly what I need. Rough figures are fine at this stage; ` +
-      `I'm not expecting anything audited:` +
-      askList(ASK_FULL) +
-      `<br>Send whatever you have to hand and I'll work with it. Once I've read through, ` +
-      `I'll come back with an indicative range.<br><br>` +
-      meetingAsk('If it is quicker to talk it through, I am happy to do that instead -');
+      diligenceRequest({}) +
+      `<br><br>` + meetingAsk('And if it\'s quicker to talk any of this through,');
   },
 
   who_are_you(lead) {
@@ -218,37 +247,36 @@ const templates = {
     const site = b.website && String(b.website).indexOf('<<') === -1 ? String(b.website) : '';
     return `${greeting(lead)}<br><br>` +
       `Of course, you should check before sharing anything.<br><br>` +
-      `I'm ${b.ownerName}, ${b.ownerTitle} at ${b.companyName}. We buy and grow mobile apps - ` +
-      `usually ones with real users that aren't being monetised anywhere near their potential, ` +
-      `which is why ${appName(lead)} caught my eye.` +
+      `I'm ${b.ownerName} from ${b.legalName}. We buy and grow mobile apps - usually ones with ` +
+      `real users that aren't being monetised anywhere near their potential, which is why ` +
+      `${appName(lead)} caught my eye.` +
       (site ? ` You can look us up at <a href="${site}">${site.replace(/^https?:\/\//, '')}</a>.` : '') +
-      `<br><br>Happy to answer anything else before you share numbers. A short call is usually the ` +
-      `fastest way to work out whether this is worth either of our time.<br><br>` +
-      meetingAsk('') + '<br><br>' +
-      `And if you would rather size it up without a call, send these over and I'll come back ` +
-      `with an indicative range in writing:` + askList(ASK_SHORT);
+      `<br><br>${reviewIsEasy()} And we're happy to sign an NDA before you share anything at all - ` +
+      `say the word and we'll send one over today.<br><br>` +
+      meetingAsk('Happy to answer anything else first, on email or on a call -');
   },
 
   already_in_talks(lead) {
     return `${greeting(lead)}<br><br>` +
       `Understood, and thanks for being straight with me.<br><br>` +
-      `If the process is still open, I'd like to be in it. We can move quickly, and it costs ` +
-      `you nothing to have one more number to compare against.<br><br>` +
-      `Send me these and I'll come back with an indicative range fast:` +
-      askList(ASK_SHORT) +
-      `<br>` + meetingAsk('Or if you would rather talk it through,') + `<br><br>` +
-      `And if it's already too far along, no hard feelings - just let me know and I'll leave you to it.`;
+      `If the process is still open, I'd like to be in it. It costs you nothing to have one ` +
+      `more number to compare against, and we're fast.<br><br>` +
+      diligenceRequest({
+        opener: 'We can start today and come back with a figure inside a week.'
+      }) +
+      `<br><br>` +
+      meetingAsk('And if it\'s worth 15 minutes to hear how we\'d approach it before you decide,') +
+      `<br><br>If it's already too far along, no hard feelings - just say so and I'll leave you to it.`;
   },
 
   later(lead) {
     return `${greeting(lead)}<br><br>` +
       `That makes sense, and there's no rush from my side.<br><br>` +
-      `Two things so this doesn't get lost. First, tell me roughly when is better and I'll come ` +
-      `back to you then rather than pestering you in between. Second, if you'd like a sense of ` +
-      `what ${appName(lead)} might be worth in the meantime, send these over and I'll put a ` +
-      `range together - no commitment, and it's useful to have even if you never sell:` +
-      askList(ASK_SHORT) +
-      `<br>` + meetingAsk('And if a short call is easier than email,');
+      `Tell me roughly when is better and I'll come back to you then rather than pestering you ` +
+      `in between.<br><br>` +
+      `${reviewIsEasy()} So whenever you do want a number on ${appName(lead)}, it's a short job ` +
+      `rather than a project - and it's worth having even if you never sell.<br><br>` +
+      meetingAsk('If you\'d rather start with a quick call whenever the timing suits,');
   },
 
   wrong_person(lead) {
@@ -279,14 +307,27 @@ const templates = {
   unclear(lead) {
     return `${greeting(lead)}<br><br>` +
       `Thanks for getting back to me.<br><br>` +
-      `To keep this simple, there are two easy ways forward. Either a quick 15-minute call, ` +
-      `where I'll explain how we value an app like ${appName(lead)} and you can decide if it's ` +
-      `worth taking further. Or, if you'd rather not get on a call, send me these and I'll come ` +
-      `back with an indicative number in writing:` +
-      askList(ASK_SHORT) +
-      `<br>` + meetingAsk('');
+      `Two easy ways forward, whichever suits you better.<br><br>` +
+      meetingAsk('One, a quick 15 minutes where I explain how we value an app like ' +
+        appName(lead) + ' and you decide if it\'s worth taking further.') +
+      `<br><br>Two, we skip straight to the numbers. ` +
+      diligenceRequest({ opener: 'We take a proper look and come back with a figure inside a week.' });
   }
 };
+
+/**
+ * Replies sign off as the legal entity, not with the job title used on the cold
+ * email. By this point the conversation is about a transaction, and
+ * "Publishing Manager" is a leftover from the earlier publishing-program pitch
+ * that reads as a contradiction next to an acquisition offer.
+ */
+function replySignature() {
+  const b = config.brand;
+  const lines = ['Thanks,', `<b>${b.ownerName}</b>`, b.legalName];
+  if (b.ownerEmail) lines.push(b.ownerEmail);
+  if (b.phone && String(b.phone).indexOf('<<') === -1 && String(b.phone).trim()) lines.push(b.phone);
+  return '<br><br>' + lines.join('<br>');
+}
 
 // Intents where pushing for a meeting would be the wrong move.
 const NO_PUSH = new Set(['not_selling', 'wrong_person', 'already_sold']);
@@ -303,7 +344,6 @@ function draft(lead, replyText, intentOverride) {
     ? { intent, label: labelFor(intent), why: 'Chosen by hand, overriding "' + found.label + '"' }
     : found;
 
-  const signature = require('./templates').signature();
   const base = String((lead && lead.reply_subject) || '').trim() ||
     ('Interested in ' + appName(lead));
   const subject = /^re:/i.test(base) ? base : 'Re: ' + base;
@@ -312,7 +352,7 @@ function draft(lead, replyText, intentOverride) {
     ...meta,
     detected: found.intent,
     subject,
-    html: templates[intent](lead || {}) + signature,
+    html: templates[intent](lead || {}) + replySignature(),
     pushesForMeeting: !NO_PUSH.has(intent)
   };
 }
@@ -328,4 +368,4 @@ function intents() {
   return Object.keys(templates).map((intent) => ({ intent, label: labelFor(intent) }));
 }
 
-module.exports = { classify, draft, intents, ASK_SHORT, ASK_FULL, labelFor };
+module.exports = { classify, draft, intents, ACCESS, QUESTIONS, diligenceRequest, labelFor };
