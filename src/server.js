@@ -13,6 +13,7 @@ const people = require('./people');
 const apify = require('./apify');
 const enrich = require('./enrich');
 const replydraft = require('./replydraft');
+const ai = require('./ai');
 const t = require('./time');
 
 function appList(l) {
@@ -766,7 +767,21 @@ function makeApp() {
       if (!lead) return res.status(404).send('Lead not found');
 
       const chosen = String(req.query.intent || '');
-      const d = replydraft.draft(lead, lead.reply_snippet, chosen);
+      const instruction = String(req.query.instruction || '');
+      const wantAI = req.query.ai !== 'off';
+
+      // Read the real conversation from Gmail. The watcher only stores a
+      // 500-char snippet, which is not enough to answer a long reply properly.
+      let thread = [];
+      if (lead.reply_thread || lead.thread_id) {
+        try { thread = await email.fetchThread(lead.reply_thread || lead.thread_id); }
+        catch (e) { thread = []; }
+      }
+
+      const d = await replydraft.draftSmart({
+        lead, thread, intentOverride: chosen, instruction, useAI: wantAI
+      });
+      const aiOn = await ai.isEnabled();
       const dry = await liveMode.isDry();
       const guard = screenReason({ name: lead.name, email: lead.email, notes: lead.notes, topApp: lead.top_app });
 
@@ -780,24 +795,43 @@ function makeApp() {
         <div class="card" style="padding:1rem;max-width:820px">
           <b>💬 What they wrote</b>
           ${lead.reply_subject ? `<div class="muted" style="margin-top:.3rem">${esc(lead.reply_subject)}</div>` : ''}
-          <div style="margin-top:.5rem;padding:.7rem;background:var(--surface-2,#f1f5f9);border-radius:6px;font-style:italic;line-height:1.6">
-            ${lead.reply_snippet ? esc(lead.reply_snippet) : '<span class="muted">Nothing was captured. Open the thread in Gmail and read it there.</span>'}
+          <div style="margin-top:.5rem;padding:.7rem;background:var(--surface-2,#f1f5f9);border-radius:6px;line-height:1.6;max-height:340px;overflow:auto">
+            ${thread.length
+              ? thread.filter((m) => !m.fromUs).slice(-2).map((m) =>
+                  `<div style="white-space:pre-wrap">${esc(m.text)}</div>`).join('<hr style="border:none;border-top:1px solid var(--line);margin:.6rem 0">')
+              : (lead.reply_snippet
+                ? `<span style="font-style:italic">${esc(lead.reply_snippet)}</span>`
+                : '<span class="muted">Nothing was captured. Open the thread in Gmail and read it there.</span>')}
           </div>
           ${lead.reply_thread ? `<div style="margin-top:.5rem"><a href="https://mail.google.com/mail/u/0/#inbox/${esc(lead.reply_thread)}" target="_blank" rel="noopener">Open the full thread in Gmail →</a>
-            <span class="muted" style="font-size:.8rem">- only the opening of a reply is captured, so check nothing important is further down</span></div>` : ''}
+            </div>` : ''}
         </div>
 
         <form method="get" action="/reply/${lead.id}" class="card stack" style="padding:1rem;max-width:820px;margin-top:1rem">
-          <b>🎯 Angle</b>
+          <b>🎯 How this was written</b>
           <div class="muted" style="font-size:.85rem;margin:.3rem 0 .6rem">
-            Read as: <b>${esc(d.label)}</b> - ${esc(d.why)}.
-            ${d.pushesForMeeting
-              ? 'The draft asks for a call first, and offers the numbers as the way out if they would rather not meet.'
-              : 'The draft deliberately does not push for a meeting here.'}
+            ${d.source === 'ai'
+              ? `<span style="color:#059669;font-weight:600">✨ Claude wrote this</span> for their actual message.
+                 Read as: <b>${esc(d.label)}</b>${d.why ? ' - ' + esc(d.why) : ''}`
+              : `<span style="color:#b45309;font-weight:600">📋 Template</span> - matched by keyword as
+                 <b>${esc(d.label)}</b>${d.why ? ' (' + esc(d.why) + ')' : ''}.
+                 ${d.aiError ? `Claude was not used: ${esc(d.aiError)}.` : ''}
+                 ${!aiOn ? 'Set <code>ANTHROPIC_API_KEY</code> in Railway to get replies written for each message.' : ''}`}
+            <br>${d.pushesForMeeting
+              ? 'It asks for a call, and offers the numbers as the way out if they would rather not meet.'
+              : 'It deliberately does not push for a meeting.'}
+            ${thread.length
+              ? `<br>Based on the <b>full thread</b> (${thread.length} message${thread.length === 1 ? '' : 's'}) read from Gmail.`
+              : '<br>⚠️ Could not read the full thread from Gmail - working from the captured snippet only.'}
           </div>
-          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
-            <select name="intent">${options}</select>
-            <button>Re-draft with this angle</button>
+          <label style="display:block;font-size:.8rem;color:var(--muted)">Tell Claude what to do differently (optional)
+            <input name="instruction" value="${esc(instruction)}" placeholder="e.g. they said email only - do not ask for a call, and mention the NDA"
+                   style="width:100%;margin-top:.2rem">
+          </label>
+          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.6rem">
+            <select name="intent"><option value="">Let Claude decide the angle</option>${options}</select>
+            <button class="primary">${d.source === 'ai' ? '✨ Rewrite' : '✨ Try Claude'}</button>
+            <button name="ai" value="off" title="Skip Claude and use the keyword-matched template">Use template instead</button>
           </div>
         </form>
 
@@ -814,7 +848,7 @@ function makeApp() {
           <textarea name="text" rows="24" spellcheck="true"
             style="width:100%;margin-top:.7rem;padding:.7rem;border:1px solid var(--line);border-radius:8px;
                    background:var(--bg);color:var(--ink);font:inherit;line-height:1.6;resize:vertical"
-          >${esc(replydraft.htmlToText(d.html))}</textarea>
+          >${esc(d.text)}</textarea>
           ${guard ? `<div class="banner" style="margin:.6rem 0">⚠️ This lead trips a guard: <b>${esc(guard)}</b>. Sending is blocked.</div>` : ''}
           <div style="margin-top:.7rem;display:flex;gap:.6rem;align-items:center">
             <button class="send" ${guard ? 'disabled' : ''}>✉ Send reply${dry ? ' (dry run - nothing will leave)' : ''}</button>

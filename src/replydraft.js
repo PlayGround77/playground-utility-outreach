@@ -30,6 +30,7 @@
  */
 
 const config = require('./config');
+const ai = require('./ai');
 
 /* ------------------------------------------------------------------ asking */
 
@@ -437,6 +438,83 @@ function draft(lead, replyText, intentOverride) {
   };
 }
 
+/**
+ * The draft the dashboard actually shows.
+ *
+ * Tries Claude first, because a written-for-this-message reply beats the best
+ * template. Falls back to the rule-based draft whenever the AI is unavailable
+ * or unhappy - no key, over the daily cap, a network failure, a refusal, or a
+ * malformed response. The caller is told which one it got, so the operator can
+ * see whether they are reading a real answer or a template.
+ *
+ * Returns the same shape as draft(), plus { source: 'ai' | 'rules', aiError }.
+ */
+async function draftSmart({ lead, thread, intentOverride, instruction, useAI }) {
+  const fallback = () => {
+    const d = draft(lead, (lead && lead.reply_snippet) || '', intentOverride);
+    return { ...d, text: htmlToText(d.html), source: 'rules', aiError: '' };
+  };
+
+  if (useAI === false) return fallback();
+
+  let out;
+  try {
+    out = await ai.draftReply({
+      lead,
+      thread,
+      replySnippet: (lead && lead.reply_snippet) || '',
+      // A hand-picked angle is passed to the model as an instruction rather
+      // than switching to the template for it - we want Claude's wording, aimed
+      // where the operator pointed.
+      instruction: buildInstruction(intentOverride, instruction)
+    });
+  } catch (e) {
+    out = { ok: false, error: e.message };
+  }
+
+  if (!out.ok) return { ...fallback(), aiError: out.error || 'unavailable' };
+
+  const base = String((lead && lead.reply_subject) || '').trim() || ('Interested in ' + appName(lead));
+  const subject = out.subject || (/^re:/i.test(base) ? base : 'Re: ' + base);
+
+  return {
+    source: 'ai',
+    aiError: '',
+    intent: intentOverride || 'ai',
+    detected: intentOverride || 'ai',
+    label: out.intent || 'Written for this reply',
+    why: out.reasoning || '',
+    pushesForMeeting: out.pushesForMeeting,
+    subject,
+    text: out.body,
+    html: textToHtml(out.body),
+    usage: out.usage || null
+  };
+}
+
+/** Turn a picked angle and any free-text note into one instruction for the model. */
+function buildInstruction(intentOverride, instruction) {
+  const parts = [];
+  if (intentOverride && ANGLE_BRIEFS[intentOverride]) parts.push(ANGLE_BRIEFS[intentOverride]);
+  if (instruction && String(instruction).trim()) parts.push(String(instruction).trim());
+  return parts.join('\n');
+}
+
+// Plain-English descriptions of each angle, for when the operator overrules the
+// model's read of the reply.
+const ANGLE_BRIEFS = {
+  interested: 'Treat them as open to talking. Propose a short call.',
+  price_first: 'They want a number before anything else. Explain we price after seeing the numbers, and ask for console access.',
+  send_info: 'They asked what we need. Give the full view-only access request and the four questions.',
+  who_are_you: 'They are checking we are real. Establish credibility, offer an NDA, and do not ask for access yet.',
+  already_in_talks: 'They are talking to other buyers. Ask to be included, stress that we are fast, and do not be pushy.',
+  later: 'The timing is wrong for them. Ask when is better, keep it warm, and do not ask for access yet.',
+  wrong_person: 'They are not the right person. Apologise and ask for an introduction. Do not pitch.',
+  already_sold: 'The app is already sold. Congratulate them and ask what they are building now. Do not pitch this app.',
+  not_selling: 'They said no. Accept it gracefully, do not push, and leave the door open.',
+  unclear: 'Their reply is ambiguous. Answer what you can and offer both a call and the numbers route.'
+};
+
 function labelFor(intent) {
   const r = RULES.find((x) => x.intent === intent);
   if (r) return r.label;
@@ -449,6 +527,7 @@ function intents() {
 }
 
 module.exports = {
-  classify, draft, intents, ACCESS, QUESTIONS, diligenceRequest, labelFor,
+  classify, draft, draftSmart, intents, ACCESS, QUESTIONS, diligenceRequest, labelFor,
+  ANGLE_BRIEFS,
   htmlToText, textToHtml
 };

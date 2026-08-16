@@ -134,4 +134,90 @@ async function scanInbox(days) {
   return { replyEmails, replyInfo, bounceEmails };
 }
 
-module.exports = { send, notify, scanInbox, isConnected, oauthClient, TOKEN_KEY };
+/** Walk a Gmail MIME tree and pull out the text. Prefers text/plain over HTML. */
+function extractBody(payload) {
+  if (!payload) return '';
+  const decode = (d) => {
+    try { return Buffer.from(String(d || ''), 'base64').toString('utf8'); }
+    catch (e) { return ''; }
+  };
+  const plain = [];
+  const html = [];
+  (function walk(p) {
+    if (!p) return;
+    const type = String(p.mimeType || '');
+    if (p.body && p.body.data) {
+      if (type === 'text/plain') plain.push(decode(p.body.data));
+      else if (type === 'text/html') html.push(decode(p.body.data));
+    }
+    (p.parts || []).forEach(walk);
+  })(payload);
+
+  let text = plain.join('\n').trim();
+  if (!text && html.length) {
+    text = html.join('\n')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+      .replace(/&#39;|&apos;/gi, "'").replace(/&quot;/gi, '"');
+  }
+  return text
+    .replace(/[ \t]+/g, ' ')      // collapse runs left behind by stripped tags
+    .replace(/ *\n */g, '\n')     // ...including at line edges
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Strip the quoted history a mail client appends when replying, so we read what
+ * this person actually wrote rather than our own email quoted back at us.
+ */
+function stripQuoted(text) {
+  const lines = String(text || '').split('\n');
+  const out = [];
+  for (const line of lines) {
+    if (/^\s*On .{0,80}wrote:\s*$/i.test(line)) break;      // Gmail
+    if (/^\s*-{2,}\s*Original Message\s*-{2,}/i.test(line)) break;
+    if (/^\s*From:\s.+@/i.test(line) && out.length) break;  // Outlook
+    if (/^\s*_{5,}\s*$/.test(line) && out.length) break;
+    out.push(line);
+  }
+  // Drop a trailing run of quoted lines even without a recognised header.
+  while (out.length && /^\s*>/.test(out[out.length - 1])) out.pop();
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * Full text of a Gmail thread, newest message last.
+ * The reply watcher only stores Gmail's 500-char snippet; drafting a real answer
+ * needs the whole message, and the earlier turns for context.
+ * Returns [{ from, date, text, fromUs }] — never throws.
+ */
+async function fetchThread(threadId, maxChars) {
+  if (!threadId) return [];
+  const cap = maxChars || 20000;
+  try {
+    const g = await gmail();
+    const me = String(config.gmail.user || '').toLowerCase();
+    const res = await g.users.threads.get({ userId: 'me', id: threadId, format: 'full' });
+    return (res.data.messages || []).map((m) => {
+      const from = headerVal(m.payload, 'From') || '';
+      const addr = (from.toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/) || [''])[0];
+      return {
+        from,
+        date: headerVal(m.payload, 'Date') || '',
+        fromUs: !!me && addr === me,
+        text: stripQuoted(extractBody(m.payload)).slice(0, cap)
+      };
+    }).filter((m) => m.text);
+  } catch (e) {
+    console.log('[email] could not fetch thread ' + threadId + ': ' + e.message);
+    return [];
+  }
+}
+
+module.exports = { send, notify, scanInbox, isConnected, oauthClient, TOKEN_KEY, fetchThread, extractBody, stripQuoted };

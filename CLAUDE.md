@@ -122,6 +122,29 @@ nothing to do with.
 
 ### Answering a reply
 
+**`src/ai.js` writes the reply with Claude; `src/replydraft.js` is the fallback.**
+`draftSmart()` calls the Claude API (`claude-opus-5`, adaptive thinking, structured output) with
+the *full Gmail thread* and the lead's context, and drops to the rule-based templates whenever the
+AI is unavailable — no `ANTHROPIC_API_KEY`, over the daily cap, network error, refusal, unparseable
+response. The dashboard shows which engine produced the draft. Losing the AI must never mean losing
+the ability to answer a lead, so **never make the template path unreachable**.
+
+- **The model gets the whole conversation, not the snippet.** `email.fetchThread()` pulls the real
+  message bodies (walking the MIME tree, preferring `text/plain`, stripping quoted history). The
+  500-char `reply_snippet` is only a fallback when the thread cannot be read.
+- **House rules live in the system prompt as constraints, not suggestions**: the view-only access
+  ask, no invented facts, never state a price, short hyphens only. `sanitize()` re-scrubs em/en
+  dashes afterwards anyway, because that one is an explicit owner requirement.
+- **A guessed contact name is explicitly flagged to the model as unsafe to use** — same rule as the
+  templates, enforced in `leadContext()`.
+- Request shape is verified against the real SDK wire format (a test points `ANTHROPIC_BASE_URL` at
+  a local server and asserts the body): no `temperature`/`top_p`, no `budget_tokens`, no prefill —
+  all of which 400 on Opus 5.
+- **`ANTHROPIC_API_KEY` has never been exercised against the live API** — the dev sandbox has no key.
+  The wire format is verified; the model's actual output is not.
+
+The rule-based layer below still runs the classification and is what you get without a key.
+
 `src/replydraft.js` reads the reply and drafts a matching answer. Every draft aims at the same two
 outcomes in order: **get a call**, and failing that **get the app's numbers** so an indicative offer
 can be made in writing. Three intents deliberately break that pattern and do not push for a meeting:
