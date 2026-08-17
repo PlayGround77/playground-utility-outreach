@@ -58,6 +58,11 @@ async function init() {
       reply_subject TEXT NOT NULL DEFAULT '',
       reply_at      TEXT NOT NULL DEFAULT '',
       reply_thread  TEXT NOT NULL DEFAULT '',
+      -- Timestamps, not just flags: "they wrote after we did" is the only way to
+      -- tell a thread that needs an answer from one we have already handled.
+      last_inbound_at  TEXT NOT NULL DEFAULT '',
+      last_outbound_at TEXT NOT NULL DEFAULT '',
+      reply_count      INTEGER NOT NULL DEFAULT 0,
       grp           TEXT NOT NULL DEFAULT '',
       developer_id  TEXT NOT NULL DEFAULT '',
       message_id    TEXT NOT NULL DEFAULT '',
@@ -95,7 +100,10 @@ async function init() {
     "reply_snippet TEXT NOT NULL DEFAULT ''",
     "reply_subject TEXT NOT NULL DEFAULT ''",
     "reply_at TEXT NOT NULL DEFAULT ''",
-    "reply_thread TEXT NOT NULL DEFAULT ''"
+    "reply_thread TEXT NOT NULL DEFAULT ''",
+    "last_inbound_at TEXT NOT NULL DEFAULT ''",
+    "last_outbound_at TEXT NOT NULL DEFAULT ''",
+    'reply_count INTEGER NOT NULL DEFAULT 0'
   ]) {
     await q(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ${col};`);
   }

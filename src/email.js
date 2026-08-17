@@ -120,9 +120,15 @@ async function scanInbox(days) {
       });
     } else {
       replyEmails.add(addr);
-      // messages.list returns newest first, so only keep the first one seen.
-      if (!replyInfo.has(addr)) {
+      // Keep the NEWEST message from this address. messages.list is documented
+      // as newest-first, but compare internalDate explicitly rather than trust
+      // the ordering - showing a stale reply is exactly the failure this causes.
+      const at = Number(msg.data.internalDate || 0);
+      const seen = replyInfo.get(addr);
+      if (!seen || at > seen.at) {
         replyInfo.set(addr, {
+          at,
+          isoAt: at ? new Date(at).toISOString() : '',
           snippet: String(msg.data.snippet || '').slice(0, 500),
           subject: headerVal(msg.data.payload, 'Subject') || '',
           date: headerVal(msg.data.payload, 'Date') || '',

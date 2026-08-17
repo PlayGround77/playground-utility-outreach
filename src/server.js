@@ -49,6 +49,16 @@ function baseUrl(req) {
 }
 
 function num(n) { return Number(n || 0).toLocaleString('en-US'); }
+/** "3h ago" / "2d ago" — a message's age matters more than its exact timestamp. */
+function agoLabel(iso) {
+  const t = Date.parse(String(iso || ''));
+  if (!t) return '';
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 60) return mins <= 1 ? 'just now' : mins + 'm ago';
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return hrs + 'h ago';
+  return Math.round(hrs / 24) + 'd ago';
+}
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -266,6 +276,12 @@ function shell(inner) {
   // The LinkedIn search popovers are <details>, which stay open until clicked
   // again. Close them the way a menu is expected to behave: on a click
   // elsewhere, on Escape, and when the pointer leaves. Only one open at a time.
+  // Open a conversation at its newest message. The reply answers that one, so
+  // starting at the top of a long thread shows the least useful part.
+  document.querySelectorAll('.thread').forEach(function(el){
+    el.scrollTop = el.scrollHeight;
+  });
+
   var openedAt = 0;   // when a panel was last opened, to tell apart the browser's
                       // own scroll-into-view from a scroll the user performed
   function closeAll(except){
@@ -372,6 +388,17 @@ function makeApp() {
       const blankNameCount = leads.filter((l) => !String(l.name || '').trim()).length;
       // How much contact detail we actually hold — this is the number that says
       // whether paying for external enrichment is worth it yet.
+      // Conversations that need an answer, newest message first. A lead is
+      // "awaiting us" when their last message is newer than our last one -
+      // which is the only way to notice someone writing again after we replied.
+      const waiting = leads
+        .filter((l) => l.reply_snippet && l.grp !== config.groups.blockList &&
+          (l.response === config.responses.respond ||
+            (l.last_inbound_at && l.last_inbound_at > (l.last_outbound_at || ''))))
+        .map((l) => ({ ...l, awaitingUs: !!(l.last_outbound_at && l.last_inbound_at > l.last_outbound_at) }))
+        .sort((a, b) => String(b.last_inbound_at || '').localeCompare(String(a.last_inbound_at || '')));
+      const awaitingCount = waiting.filter((l) => l.awaitingUs).length;
+
       // Status only — the keys themselves never reach the page.
       const aiKey = await ai.keyStatus();
       const apifyKey = await apify.keyStatus();
@@ -525,13 +552,16 @@ function makeApp() {
 
         ${msg ? `<div class="banner">${msg}</div>` : ''}
 
-        ${st.replied ? `<div class="banner" style="border-color:#10b981;background:#dcfce7;color:#065f46">
-          🎉 <b>${st.replied} lead${st.replied === 1 ? '' : 's'} replied to your email.</b>
+        ${waiting.length ? `<div class="banner" style="border-color:#10b981;background:#dcfce7;color:#065f46">
+          🎉 <b>${waiting.length} conversation${waiting.length === 1 ? '' : 's'} waiting on you.</b>
           <a href="/?view=replied" style="margin-left:.5rem;font-weight:600">Show them →</a>
-          <span style="opacity:.8">Set “Booked a call” or “Not Relevant” on the row once you have read them.</span>
-          ${leads.filter((l) => l.response === R.respond && l.reply_snippet).slice(0, 5).map((l) => `
+          <span style="opacity:.8">Newest first. ${awaitingCount ? `<b>${awaitingCount}</b> wrote again after your answer.` : ''}</span>
+          ${waiting.slice(0, 6).map((l) => `
             <div style="margin-top:.5rem;padding:.5rem .7rem;background:#ffffff88;border-radius:8px">
               <b>${esc(l.name)}</b>${l.reply_subject ? ` <span style="opacity:.7">— ${esc(l.reply_subject)}</span>` : ''}
+              ${l.awaitingUs ? '<span class="pill" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5;margin-left:.4rem;font-size:.68rem">↩ replied after you</span>' : ''}
+              ${Number(l.reply_count) > 1 ? `<span class="muted" style="font-size:.72rem;margin-left:.4rem">${l.reply_count} messages</span>` : ''}
+              <span class="muted" style="font-size:.72rem;margin-left:.4rem">${esc(agoLabel(l.last_inbound_at))}</span>
               <a href="/reply/${l.id}" style="margin-left:.4rem;font-weight:600">✍️ Draft a reply →</a>
               ${l.reply_thread ? `<a href="https://mail.google.com/mail/u/0/#inbox/${esc(l.reply_thread)}" target="_blank" rel="noopener" style="margin-left:.4rem">open in Gmail →</a>` : ''}
               <div style="opacity:.85;font-style:italic;margin-top:.2rem">“${esc(l.reply_snippet)}”</div>
@@ -948,14 +978,27 @@ function makeApp() {
         <h1 style="font-size:1.2rem">Reply to ${esc(lead.name)}</h1>
 
         <div class="card" style="padding:1rem;max-width:820px">
-          <b>💬 What they wrote</b>
+          <b>💬 The conversation${thread.length ? ` <span class="muted" style="font-weight:400">(${thread.length} message${thread.length === 1 ? '' : 's'}, oldest first)</span>` : ''}</b>
           ${lead.reply_subject ? `<div class="muted" style="margin-top:.3rem">${esc(lead.reply_subject)}</div>` : ''}
-          <div style="margin-top:.5rem;padding:.7rem;background:var(--surface-2,#f1f5f9);border-radius:6px;line-height:1.6;max-height:340px;overflow:auto">
+          <div class="thread" style="margin-top:.5rem;max-height:420px;overflow:auto;padding-right:.2rem">
             ${thread.length
-              ? thread.filter((m) => !m.fromUs).slice(-2).map((m) =>
-                  `<div style="white-space:pre-wrap">${esc(m.text)}</div>`).join('<hr style="border:none;border-top:1px solid var(--line);margin:.6rem 0">')
+              ? thread.map((m, i) => {
+                  const last = i === thread.length - 1;
+                  return `<div style="margin:.45rem 0;padding:.6rem .75rem;border-radius:10px;line-height:1.6;
+                    background:${m.fromUs ? 'var(--chip)' : 'var(--panel)'};
+                    border:1px solid ${last && !m.fromUs ? '#10b981' : 'var(--line)'};
+                    ${m.fromUs ? 'margin-left:2.5rem' : 'margin-right:2.5rem'}">
+                    <div class="muted" style="font-size:.72rem;margin-bottom:.25rem">
+                      ${m.fromUs ? '↗ You' : '↩ ' + esc(lead.name)}
+                      ${m.date ? ' · ' + esc(m.date) : ''}
+                      ${last && !m.fromUs ? ' · <b style="color:#059669">latest — the draft answers this</b>' : ''}
+                    </div>
+                    <div style="white-space:pre-wrap">${esc(m.text)}</div>
+                  </div>`;
+                }).join('')
               : (lead.reply_snippet
-                ? `<span style="font-style:italic">${esc(lead.reply_snippet)}</span>`
+                ? `<div style="padding:.6rem .75rem;background:var(--panel);border:1px solid var(--line);border-radius:10px;font-style:italic">${esc(lead.reply_snippet)}
+                   <div class="muted" style="font-style:normal;font-size:.75rem;margin-top:.3rem">Only the captured preview — the full thread could not be read from Gmail.</div></div>`
                 : '<span class="muted">Nothing was captured. Open the thread in Gmail and read it there.</span>')}
           </div>
           ${lead.reply_thread ? `<div style="margin-top:.5rem"><a href="https://mail.google.com/mail/u/0/#inbox/${esc(lead.reply_thread)}" target="_blank" rel="noopener">Open the full thread in Gmail →</a>
@@ -1039,6 +1082,9 @@ function makeApp() {
         inReplyTo: lead.message_id || undefined,
         threadId: lead.reply_thread || lead.thread_id || undefined
       });
+      // Stamping this is what lets the dashboard tell "waiting on them" from
+      // "waiting on you" when they write again.
+      await db.updateLead(lead.id, { last_outbound_at: new Date().toISOString() });
       await db.logEvent(lead.id, 'reply_sent');
       return back(res, `✉ Replied to ${lead.name} <${lead.email}> in the same thread.`);
     } catch (e) { return back(res, '⚠️ Reply failed: ' + e.message); }

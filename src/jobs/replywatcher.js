@@ -27,38 +27,55 @@ async function runReplyWatcher() {
       const em = lead.email.toLowerCase();
       if (scan.bounceEmails.has(em)) {
         bounces++;
-        if (dry) { log(`[DRY] BOUNCE ${lead.name}`); continue; }
+        // Recorded in dry mode too. DRY_RUN means "no email leaves the
+        // building" - reading the inbox and writing what we found is
+        // observation, and suppressing it left the dashboard blank on the one
+        // setting people actually test in.
         await db.updateLead(lead.id, { response: R.notRelevant, outreach: S.sequenceClosed });
         await db.logEvent(lead.id, 'bounce');
         log('BOUNCE ' + lead.name);
       } else if (scan.replyEmails.has(em)) {
         replies++;
         const info = (scan.replyInfo && scan.replyInfo.get(em)) || {};
-        if (dry) { log(`[DRY] REPLY ${lead.name}`); continue; }
 
-        // "New" = we had not recorded a response for this lead yet. Manual
-        // values (Booked a call / Not Relevant) are never overwritten.
-        const isNew = !lead.response;
+        // "New" means a message we have not seen before, by timestamp - not
+        // "the first reply ever". A lead who answers again after we replied is
+        // the case that matters most, and a first-reply-only test misses it
+        // entirely: their newest message would sit unread behind a stale one.
+        const seenAt = String(lead.last_inbound_at || '');
+        const isNewer = !!info.isoAt && info.isoAt > seenAt;
+        const isFirst = !lead.response && !seenAt;
+
+        if (!isNewer && seenAt) { log('REPLY (already seen) ' + lead.name); continue; }
+
         const patch = {
           reply_snippet: info.snippet || '',
           reply_subject: info.subject || '',
           reply_at: info.date || '',
-          reply_thread: info.threadId || ''
+          reply_thread: info.threadId || '',
+          last_inbound_at: info.isoAt || new Date().toISOString(),
+          reply_count: Number(lead.reply_count || 0) + 1
         };
-        if (isNew) patch.response = R.respond;
+        // Response is the operator's own status. Only ever set it automatically
+        // on the very first reply - never overwrite a "Booked a call" they set
+        // by hand. A later message surfaces through last_inbound_at instead.
+        if (isFirst) patch.response = R.respond;
         await db.updateLead(lead.id, patch);
-        if (isNew) {
-          await db.logEvent(lead.id, 'reply');
-          freshReplies.push({ lead, info });
-        }
-        log('REPLY ' + lead.name);
+        await db.logEvent(lead.id, 'reply');
+
+        // Alert on anything we have not shown before, including a follow-up
+        // that landed after we answered.
+        const afterOurReply = !!lead.last_outbound_at && info.isoAt > lead.last_outbound_at;
+        freshReplies.push({ lead, info, afterOurReply });
+        log('REPLY ' + (afterOurReply ? '(new, after our answer) ' : '') + lead.name);
       }
     }
 
-    // Immediate alert so a hot lead isn't missed until the 08:00 summary.
-    if (freshReplies.length && config.report.summaryTo) {
-      const body = freshReplies.map(({ lead, info }) =>
-        `${lead.name} <${lead.email}>\n` +
+    // Immediate alert so a hot lead isn't missed until the 08:00 summary. This
+    // is the only outward-facing step here, so this is what dry mode gates.
+    if (freshReplies.length && config.report.summaryTo && !dry) {
+      const body = freshReplies.map(({ lead, info, afterOurReply }) =>
+        `${lead.name} <${lead.email}>${afterOurReply ? '  [replied again after your answer]' : ''}\n` +
         (info.subject ? `Subject: ${info.subject}\n` : '') +
         (info.snippet ? `\n"${info.snippet}"\n` : '') +
         (info.threadId ? `\nOpen in Gmail: https://mail.google.com/mail/u/0/#inbox/${info.threadId}\n` : '')

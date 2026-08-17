@@ -147,7 +147,25 @@ the ability to answer a lead, so **never make the template path unreachable**.
 
 - **The model gets the whole conversation, not the snippet.** `email.fetchThread()` pulls the real
   message bodies (walking the MIME tree, preferring `text/plain`, stripping quoted history). The
-  500-char `reply_snippet` is only a fallback when the thread cannot be read.
+  500-char `reply_snippet` is only a fallback when the thread cannot be read. `threadBlock()` marks
+  their newest message so a long thread does not invite the model to answer the wrong part.
+
+### Whose turn is it
+
+**`last_inbound_at` vs `last_outbound_at` is the whole model.** A conversation needs an answer when
+their last message is newer than ours. Flags cannot express this: someone who writes again after we
+replied is the case that matters most, and a first-reply-only test misses it entirely.
+
+- `replywatcher.js` treats "new" as *newer by timestamp*, not "first reply ever", and picks the
+  newest inbound message by comparing `internalDate` rather than trusting Gmail's list order.
+- **It never overwrites `response`** after the first reply — that column is the operator's own
+  status. A later message surfaces through the timestamps instead, so a "Booked a call" lead who
+  writes again still appears in the waiting list.
+- `POST /reply/:id/send` stamps `last_outbound_at`; without it the system cannot tell "waiting on
+  them" from "waiting on you".
+- **The reply watcher writes to the DB in dry mode.** DRY_RUN means no email leaves the building;
+  reading the inbox and recording what was found is observation. It used to skip the writes, which
+  left the dashboard blank on the one setting people test in. Only the alert email is gated.
 - **House rules live in the system prompt as constraints, not suggestions**: the view-only access
   ask, no invented facts, never state a price, short hyphens only. `sanitize()` re-scrubs em/en
   dashes afterwards anyway, because that one is an explicit owner requirement.

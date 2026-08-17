@@ -186,12 +186,21 @@ function leadContext(lead) {
   return lines.filter(Boolean).join('\n');
 }
 
-/** The conversation so far, oldest first. */
+/**
+ * The conversation so far, oldest first, with the message to answer marked.
+ * Without the marker a long thread invites the model to reply to whichever part
+ * it finds most interesting rather than to what they just said.
+ */
 function threadBlock(thread, fallbackSnippet) {
   if (thread && thread.length) {
-    return thread.map((m) =>
-      `--- ${m.fromUs ? 'US' : 'THEM'} (${m.date || 'no date'}) ---\n${m.text}`
-    ).join('\n\n');
+    const lastTheirs = thread.map((m) => m.fromUs).lastIndexOf(false);
+    return thread.map((m, i) => {
+      const tag = m.fromUs ? 'US' : 'THEM';
+      const mark = (i === lastTheirs)
+        ? '  <<< THIS IS THEIR LATEST MESSAGE - ANSWER THIS ONE'
+        : '';
+      return `--- ${tag} (${m.date || 'no date'})${mark} ---\n${m.text}`;
+    }).join('\n\n');
   }
   const s = String(fallbackSnippet || '').trim();
   return s
@@ -237,7 +246,9 @@ async function draftReply({ lead, thread, replySnippet, instruction }) {
 
   const userContent =
     `Here is the lead:\n\n${leadContext(lead)}\n\n` +
-    `Here is the email conversation so far:\n\n${threadBlock(thread, replySnippet)}\n\n` +
+    `Here is the email conversation so far, oldest message first:\n\n${threadBlock(thread, replySnippet)}\n\n` +
+    `Reply to their LATEST message. Earlier messages are context - do not answer ` +
+    `points that were already settled, and do not repeat what we have already told them.\n\n` +
     (instruction
       ? `The operator wants this specific angle, and it overrides your own judgement so long as it does not break the hard rules:\n${instruction}\n\n`
       : '') +
