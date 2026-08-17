@@ -252,12 +252,36 @@ draft. It runs at `effort: 'low'` — these are edits, not fresh reasoning.
   `sanitize()` scrubs the result anyway. **Translating THEIR message is the deliberate exception**:
   it is their text, a faithful translation is the whole point, and it gets a plain translator system
   prompt, no house rules, no `leadContext()`, and no dash-scrubbing.
-- **`rephrase` returns only the replacement passage**, which the client splices back with
-  `value.slice(0,s) + text + value.slice(e)` and leaves selected. The button stays disabled until
-  something is actually selected (`selectionEnd > selectionStart`).
+- **The selection is a scope, not another action.** "Make it friendlier" and "make this sentence
+  friendlier" are the same request with one extra argument, so `transformBrief()` splits into
+  `actionBrief()` (what to do) and `scopedBrief()` (aim it at one marked passage). **Passing a
+  `selection` changes the return value**: `transform()` then returns *only* the replacement, which
+  the client splices back with `value.slice(0,s) + text + value.slice(e)` and leaves selected. Every
+  tool inherits this; adding one does not mean adding a selection variant of it.
+- The `t-scope` dropdown switches to the selection by itself when you highlight something, and back
+  when you clear it. **The offsets are stashed on every selection change, not read at click time** —
+  clicking a dropdown blurs the textarea. `rephrase` ignores the dropdown: highlighting is the whole
+  gesture, and refusing it because a `<select>` says "whole reply" would just be confusing.
 - Translation is a **toggle**: the original is stashed in `dataset.original` and the button flips to
-  "↩ Show original". Never lose their real words behind a translation.
+  "↩ Show original". Never lose their real words behind a translation. It is also never scoped — a
+  half-translated message is worse than an untranslated one.
 - Unknown actions, an empty selection and an empty draft are all refused **before** the API call.
+
+### Draft versions (Back / Forward)
+
+Every AI change replaces the whole textarea, which wipes the browser's own undo stack — so the page
+keeps its own labelled history: `Template draft → Claude's draft → your edit → shorter (passage)`.
+The async Claude draft goes through `window.__draftVersion` rather than assigning to the box, or the
+template it replaces would be unreachable.
+
+- **Navigation is a step, not an index.** `captureEdit()` may append the operator's typing and move
+  `hpos`, so a target worked out before it runs is stale — that landed you one version short of your
+  own text when you pressed Back after typing and then Forward. `step(±1)` computes the target
+  *after* the capture.
+- Typing after a generated version is itself a version. Stepping away commits it first, so Back can
+  never silently discard what you wrote.
+- Running any tool sets `window.__draftEdited`, which the async draft checks alongside its own
+  `touched` flag — otherwise a slow Claude draft would land on top of a rewrite you already made.
 
 ### Who spoke last
 

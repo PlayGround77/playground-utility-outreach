@@ -325,41 +325,73 @@ const HOUSE = `Keep every hard rule: only short hyphens (-), never an em or en d
 facts, numbers, deals or names; never state a price or a range; no corporate filler and no emoji;
 keep the same sign-off. Do not answer anything the original draft did not answer.`;
 
-/** What to ask for, per action. Returns null for an unknown action. */
-function transformBrief({ kind, option, selection }) {
+/**
+ * What to ask for, per action - the instruction alone, with no opinion about
+ * whether it applies to the whole draft or one passage. Returns null for an
+ * unknown or incomplete action.
+ */
+function actionBrief({ kind, option }) {
   if (kind === 'tone') {
     const t = TONES[option];
-    return t && `Rewrite the reply below in this register: ${t}\n\n${HOUSE}`;
+    return t && `Rewrite it in this register: ${t}`;
   }
   if (kind === 'length') {
     const l = LENGTHS[option];
-    return l && `Rewrite the reply below. ${l}\n\n${HOUSE}`;
+    return l && `Rewrite it. ${l}`;
   }
   if (kind === 'language') {
     const lang = String(option || '').trim();
-    return lang && `Rewrite the reply below entirely in ${lang}, as a fluent native speaker would ` +
-      `write it - a natural business email, not a literal translation. Keep names, the company ` +
-      `name and email addresses as they are.\n\n${HOUSE}`;
+    return lang && `Rewrite it entirely in ${lang}, as a fluent native speaker would write it - ` +
+      `natural business writing, not a literal translation. Keep names, the company name and ` +
+      `email addresses as they are.`;
   }
   if (kind === 'rephrase') {
-    if (!selection) return null;
-    return `Below is a reply, and one passage from it marked out. Rewrite ONLY that passage. ` +
-      `It must drop into the same place and read naturally with the sentences around it. ` +
-      `Return only the replacement passage - no quotes, no preamble, no surrounding text.\n\n` +
-      `The passage to rewrite:\n"""${selection}"""\n\n${HOUSE}`;
+    // Only ever meaningful on a passage; the scope wrapper carries the rest.
+    return 'Say the same thing differently - same meaning, same facts, better wording.';
   }
   if (kind === 'custom') {
     const note = String(option || '').trim();
-    return note && `Rewrite the reply below according to this instruction: ${note}\n\n${HOUSE}`;
+    return note && `Rewrite it according to this instruction: ${note}`;
   }
+  return null;
+}
+
+/**
+ * Wrap an instruction so it applies to ONE marked passage instead of the whole
+ * draft. Returning only the replacement is what lets the client splice it back
+ * without disturbing a single character around it.
+ */
+function scopedBrief(instruction, selection) {
+  return `Below is a reply, and one passage from it marked out. Apply this to ONLY that passage, ` +
+    `leaving the rest of the reply untouched:\n\n${instruction}\n\n` +
+    `The rewrite must drop into the same place and read naturally with the sentences around it - ` +
+    `mind the surrounding punctuation and capitalisation. Return only the replacement passage, ` +
+    `no quotes, no preamble, no surrounding text.\n\n` +
+    `The passage to rewrite:\n"""${selection}"""`;
+}
+
+/**
+ * The full prompt for one action. Any action can be aimed at a selection rather
+ * than the whole draft - that is the only difference between "make it friendlier"
+ * and "make this sentence friendlier", so it is one flag, not seven more kinds.
+ */
+function transformBrief({ kind, option, selection }) {
   if (kind === 'translate') {
     const lang = String(option || 'English').trim() || 'English';
-    // Their words, not ours - translate faithfully rather than improving it.
+    // Their words, not ours - translate faithfully rather than improving it, and
+    // never scoped: a half-translated message is worse than an untranslated one.
     return `Translate the message below into ${lang}. Translate faithfully, including the tone ` +
       `and any hedging: do not summarise, soften, or answer it. If it is already in ${lang}, ` +
       `return it unchanged. Return only the translation.`;
   }
-  return null;
+  const instruction = actionBrief({ kind, option });
+  if (!instruction) return null;
+  const sel = String(selection || '').trim();
+  // Rephrase has nothing to say about a whole draft - "reword all of it" is what
+  // the tone and length actions are for.
+  if (kind === 'rephrase' && !sel) return null;
+  return (sel ? scopedBrief(instruction, sel) : 'Rewrite the reply below. ' + instruction) +
+    `\n\n${HOUSE}`;
 }
 
 const TEXT_SCHEMA = {
@@ -371,8 +403,9 @@ const TEXT_SCHEMA = {
 
 /**
  * Run one editing action. Returns { ok, text, error } and never throws.
- * `text` is the whole rewritten draft, except for 'rephrase' where it is just
- * the replacement for the selected passage.
+ * `text` is the whole rewritten draft - EXCEPT when a `selection` is passed, in
+ * which case it is only the replacement for that passage and the caller splices
+ * it back in. Any action can be aimed at a selection this way.
  */
 async function transform({ kind, option, text, selection, lead }) {
   const key = await apiKey();
@@ -434,7 +467,7 @@ function sanitize(body) {
 }
 
 module.exports = {
-  draftReply, transform, transformBrief, isEnabled, keyStatus, setKey, testKey,
+  draftReply, transform, transformBrief, actionBrief, scopedBrief, isEnabled, keyStatus, setKey, testKey,
   systemPrompt, leadContext, threadBlock, sanitize,
   TONES, LENGTHS, MODEL, DAILY_CAP, KEY_SETTING
 };

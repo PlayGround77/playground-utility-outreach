@@ -1150,7 +1150,12 @@ function makeApp() {
             <input name="subject" value="${esc(d.subject)}" style="width:100%;margin-top:.2rem">
           </label>
           ${aiOn ? `<div class="aitools" style="margin-top:.7rem">
-            <span class="muted" style="font-size:.75rem">Rewrite:</span>
+            <span class="muted" style="font-size:.75rem">Rewrite</span>
+            <select id="t-scope" title="Every tool here applies to whatever this says. Highlight text in the draft and it switches to your selection by itself.">
+              <option value="all">the whole reply</option>
+              <option value="sel" disabled>the selection</option>
+            </select>
+            <span class="muted" style="font-size:.75rem">:</span>
             <select id="t-tone"><option value="">Tone…</option>${
               Object.keys(ai.TONES).map((k) => `<option value="${k}">${k[0].toUpperCase() + k.slice(1)}</option>`).join('')
             }</select>
@@ -1161,11 +1166,17 @@ function makeApp() {
                 'Russian', 'Turkish', 'Arabic', 'Hebrew', 'Hindi', 'Indonesian', 'Vietnamese',
                 'Chinese', 'Japanese', 'Korean'].map((l) => `<option>${l}</option>`).join('')
             }</select>
-            <button type="button" id="t-sel" disabled
-              title="Select a sentence in the draft first, then click this to rephrase just that part">✏️ Rephrase selection</button>
-            <input id="t-custom" placeholder="or tell it what to change…" style="min-width:190px">
+            <button type="button" id="t-sel" data-kind="rephrase" disabled
+              title="Highlight a sentence in the draft, then click this to reword just that part">✏️ Reword</button>
+            <input id="t-custom" placeholder="or tell it what to change…" style="min-width:180px">
             <button type="button" id="t-go">Apply</button>
             <span id="t-state" class="muted" style="font-size:.78rem"></span>
+          </div>
+          <div class="aitools" style="border-top:0;border-radius:0 0 8px 8px;margin-top:-1px">
+            <button type="button" id="h-undo" disabled title="Go back to the previous version of this draft">↶ Back</button>
+            <button type="button" id="h-redo" disabled title="Go forward again">↷ Forward</button>
+            <span id="h-state" class="muted" style="font-size:.78rem"></span>
+            <span id="h-trail" class="muted" style="font-size:.72rem;margin-left:auto"></span>
           </div>` : ''}
           <textarea name="text" rows="24" spellcheck="true"
             style="width:100%;margin-top:.7rem;padding:.7rem;border:1px solid var(--line);border-radius:8px;
@@ -1187,12 +1198,14 @@ function makeApp() {
           var tone = document.getElementById('t-tone');
           var lang = document.getElementById('t-lang');
           var custom = document.getElementById('t-custom');
+          var scope = document.getElementById('t-scope');
+          var scopeSel = scope.querySelector('option[value=sel]');
 
           function busy(on, what){
             state.textContent = on ? ('✨ ' + what + '…') : '';
             document.querySelectorAll('.aitools button, .aitools select, .aitools input')
               .forEach(function(el){ el.disabled = on; });
-            if(!on) syncSel();
+            if(!on){ syncSel(); paintHistory(); }
           }
           function post(body){
             return fetch('/reply/' + LEAD + '/transform', {
@@ -1201,52 +1214,137 @@ function makeApp() {
               body: JSON.stringify(body)
             }).then(function(r){ return r.json(); });
           }
-          // Enable "rephrase selection" only when something is actually selected.
+
+          /* ---- version history --------------------------------------------
+             Every AI change replaces the whole box, which wipes the browser's
+             own undo stack - so we keep our own. Entries are labelled, because
+             "back to the version before I made it shorter" is what you actually
+             want, not an anonymous undo. */
+          var hist = [{ text: box.value, label: ${JSON.stringify(d.source === 'ai' ? "Claude's draft" : 'Template draft')} }];
+          var hpos = 0;
+          var undoBtn = document.getElementById('h-undo');
+          var redoBtn = document.getElementById('h-redo');
+          var hState = document.getElementById('h-state');
+          var hTrail = document.getElementById('h-trail');
+
+          function paintHistory(){
+            undoBtn.disabled = hpos <= 0;
+            redoBtn.disabled = hpos >= hist.length - 1;
+            hState.textContent = hist.length > 1
+              ? 'version ' + (hpos + 1) + ' of ' + hist.length + ' · ' + hist[hpos].label
+              : hist[0].label;
+            var from = Math.max(0, hist.length - 5);
+            hTrail.textContent = hist.length > 1
+              ? (from ? '… → ' : '') + hist.slice(from).map(function(h, i){
+                  return (from + i) === hpos ? '[' + h.label + ']' : h.label;
+                }).join(' → ')
+              : '';
+          }
+          // Typing after a generated version is itself a version worth keeping,
+          // otherwise going Back would silently throw away what you wrote.
+          function captureEdit(){
+            if(box.value !== hist[hpos].text){
+              hist = hist.slice(0, hpos + 1);
+              hist.push({ text: box.value, label: 'your edit' });
+              hpos = hist.length - 1;
+            }
+          }
+          function push(text, label){
+            captureEdit();
+            hist = hist.slice(0, hpos + 1);          // a new branch drops the redo tail
+            hist.push({ text: text, label: label });
+            hpos = hist.length - 1;
+            box.value = text;
+            paintHistory();
+          }
+          // A step, not an index: captureEdit may append the operator's typing
+          // and move hpos, so a target worked out before that runs is stale -
+          // which landed you one version short of your own text on the way back.
+          function step(delta){
+            captureEdit();                            // never lose a manual edit
+            var i = hpos + delta;
+            if(i < 0 || i >= hist.length) { paintHistory(); return; }
+            hpos = i;
+            box.value = hist[hpos].text;
+            state.textContent = '';
+            paintHistory();
+          }
+          undoBtn.addEventListener('click', function(){ step(-1); });
+          redoBtn.addEventListener('click', function(){ step(1); });
+          paintHistory();
+          // The async Claude draft lands from the other script and must become a
+          // version too, or the template it replaces would be unreachable.
+          window.__draftVersion = function(text, label){ push(text, label); };
+
+          /* ---- scope: whole reply, or just what you highlighted ------------
+             Clicking a dropdown blurs the textarea, so the offsets are stashed
+             on every selection change rather than read at click time. */
+          var lastSel = null;
           function syncSel(){
-            if(!selBtn) return;
-            selBtn.disabled = !(box.selectionEnd > box.selectionStart);
+            var s = box.selectionStart, e = box.selectionEnd;
+            var has = e > s && box.value.slice(s, e).trim().length > 0;
+            if(has) lastSel = { s: s, e: e };
+            else if(document.activeElement === box) lastSel = null;
+            var live = !!lastSel;
+            scopeSel.disabled = !live;
+            scopeSel.textContent = live
+              ? 'the selection (' + (lastSel.e - lastSel.s) + ' chars)'
+              : 'the selection';
+            if(live && document.activeElement === box) scope.value = 'sel';
+            if(!live && scope.value === 'sel') scope.value = 'all';
+            selBtn.disabled = !live;
           }
           ['select','keyup','mouseup','input','focus'].forEach(function(ev){
             box.addEventListener(ev, syncSel);
           });
           syncSel();
 
-          function apply(kind, option){
-            busy(true, 'rewriting');
-            post({ kind: kind, option: option, text: box.value }).then(function(d){
+          // One path for every tool. A selection is just an extra argument, so
+          // "make it friendlier" and "make this sentence friendlier" are the
+          // same request - and the result is spliced back rather than replacing
+          // the draft.
+          function apply(kind, option, label){
+            // Reword is about a passage by definition, so it does not need the
+            // scope set as well - highlighting is the whole gesture.
+            var useSel = (kind === 'rephrase' || scope.value === 'sel') && lastSel;
+            var sel = useSel ? box.value.slice(lastSel.s, lastSel.e) : '';
+            if(kind === 'rephrase' && !sel){ state.textContent = 'Highlight some text first.'; return; }
+            var at = useSel ? { s: lastSel.s, e: lastSel.e } : null;
+            window.__draftEdited = true;   // a late async draft must not eat this
+            busy(true, useSel ? 'rewriting the selection' : 'rewriting');
+            post({ kind: kind, option: option, selection: sel, text: box.value }).then(function(d){
               busy(false);
               if(!d.ok){ state.textContent = '⚠️ ' + (d.error || 'failed'); return; }
-              box.value = d.text;
-              state.textContent = '✓ updated';
+              if(at){
+                push(box.value.slice(0, at.s) + d.text + box.value.slice(at.e), label + ' (passage)');
+                box.focus();
+                box.setSelectionRange(at.s, at.s + d.text.length);  // left selected to compare
+                syncSel();
+                state.textContent = '✓ passage rewritten';
+              } else {
+                push(d.text, label);
+                state.textContent = '✓ updated';
+              }
             }).catch(function(){ busy(false); state.textContent = '⚠️ request failed'; });
           }
 
           document.querySelectorAll('.aitools button[data-kind]').forEach(function(b){
-            b.addEventListener('click', function(){ apply(b.dataset.kind, b.dataset.option); });
+            b.addEventListener('click', function(){
+              apply(b.dataset.kind, b.dataset.option, b.dataset.option || b.dataset.kind);
+            });
           });
-          if(tone) tone.addEventListener('change', function(){ if(tone.value) apply('tone', tone.value); });
-          if(lang) lang.addEventListener('change', function(){ if(lang.value) apply('language', lang.value); });
+          if(tone) tone.addEventListener('change', function(){
+            if(tone.value){ apply('tone', tone.value, tone.value); tone.value = ''; }
+          });
+          if(lang) lang.addEventListener('change', function(){
+            if(lang.value){ apply('language', lang.value, 'in ' + lang.value); lang.value = ''; }
+          });
 
           var go = document.getElementById('t-go');
           if(go) go.addEventListener('click', function(){
-            if(!custom.value.trim()){ state.textContent = 'Type what to change first.'; return; }
-            apply('custom', custom.value.trim());
-          });
-
-          // Rephrase just the highlighted passage, splicing the result back in.
-          if(selBtn) selBtn.addEventListener('click', function(){
-            var s = box.selectionStart, e = box.selectionEnd;
-            var sel = box.value.slice(s, e);
-            if(!sel.trim()){ state.textContent = 'Select some text first.'; return; }
-            busy(true, 'rephrasing the selection');
-            post({ kind: 'rephrase', selection: sel, text: box.value }).then(function(d){
-              busy(false);
-              if(!d.ok){ state.textContent = '⚠️ ' + (d.error || 'failed'); return; }
-              box.value = box.value.slice(0, s) + d.text + box.value.slice(e);
-              box.focus();
-              box.setSelectionRange(s, s + d.text.length);   // leave it selected to compare
-              state.textContent = '✓ passage rewritten';
-            }).catch(function(){ busy(false); state.textContent = '⚠️ request failed'; });
+            var note = custom.value.trim();
+            if(!note){ state.textContent = 'Type what to change first.'; return; }
+            apply('custom', note, note.length > 24 ? note.slice(0, 24) + '…' : note);
           });
 
           // Translate one of their messages in place, keeping the original.
@@ -1300,14 +1398,16 @@ function makeApp() {
                 if(fallbackLine) fallbackLine.hidden = false;
                 return;
               }
-              if(touched){
+              if(touched || window.__draftEdited){
                 state.innerHTML = '<span style="color:#b45309;font-weight:600">✨ Claude finished, ' +
                   'but you had already started editing</span> — your text was kept. ' +
                   '<a href="' + location.href + '">Reload to use Claude\\'s version</a>.';
                 return;
               }
               if(d.subject) subj.value = d.subject;
-              box.value = d.text;
+              // Go through the history so "↶ Back" returns to the template draft.
+              if(window.__draftVersion) window.__draftVersion(d.text, "Claude's draft");
+              else box.value = d.text;
               state.innerHTML = '<span style="color:#059669;font-weight:600">✨ Claude wrote this</span> ' +
                 'for their latest message. Read as: <b>' + esc(d.label) + '</b>' +
                 (d.why ? ' — ' + esc(d.why) : '');
