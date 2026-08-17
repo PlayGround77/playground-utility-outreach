@@ -240,6 +240,21 @@ function shell(inner) {
   thead th:first-child,thead th:last-child{z-index:3}
   tbody tr:hover td:first-child,tbody tr:hover td:last-child{background:var(--hover)}
   td.num{text-align:right;font-variant-numeric:tabular-nums}
+  /* Someone wrote and is still waiting on an answer. The stripe rides on the
+     pinned first cell so it stays on screen however far the table is scrolled;
+     the Reply column can be scrolled right out of view. */
+  tr.needsreply td:first-child{box-shadow:inset 4px 0 0 #f43f5e}
+  tr.needsreply td{background:#fff1f2}
+  tr.needsreply td:first-child,tr.needsreply td:last-child{background:#fff1f2}
+  tr.needsreply:hover td{background:#ffe4e6}
+  tr.needsreply:hover td:first-child,tr.needsreply:hover td:last-child{background:#ffe4e6}
+  @media (prefers-color-scheme:dark){
+    tr.needsreply td,tr.needsreply td:first-child,tr.needsreply td:last-child{background:#2a1417}
+    tr.needsreply:hover td,tr.needsreply:hover td:first-child,tr.needsreply:hover td:last-child{background:#3a1b1f}
+  }
+  a.unanswered{display:inline-block;background:#f43f5e;color:#fff;font-size:.66rem;font-weight:700;
+    letter-spacing:.03em;padding:.05rem .35rem;border-radius:999px;white-space:nowrap;text-decoration:none}
+  a.unanswered:hover{background:#e11d48}
   select{font:inherit;padding:.25rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
   .sel{display:block;margin:0}
   a{color:var(--accent);text-decoration:none}
@@ -391,11 +406,15 @@ function makeApp() {
       // Conversations that need an answer, newest message first. A lead is
       // "awaiting us" when their last message is newer than our last one -
       // which is the only way to notice someone writing again after we replied.
+      // Annotate in place so the banner, the row highlight and the counts all
+      // agree — one definition of "they are waiting on us", not three.
+      for (const l of leads) {
+        l.awaitingUs = !!(l.last_outbound_at && l.last_inbound_at && l.last_inbound_at > l.last_outbound_at);
+        l.needsReply = !!(l.reply_snippet && l.grp !== config.groups.blockList &&
+          (l.awaitingUs || (l.response === config.responses.respond && !l.last_outbound_at)));
+      }
       const waiting = leads
-        .filter((l) => l.reply_snippet && l.grp !== config.groups.blockList &&
-          (l.response === config.responses.respond ||
-            (l.last_inbound_at && l.last_inbound_at > (l.last_outbound_at || ''))))
-        .map((l) => ({ ...l, awaitingUs: !!(l.last_outbound_at && l.last_inbound_at > l.last_outbound_at) }))
+        .filter((l) => l.needsReply)
         .sort((a, b) => String(b.last_inbound_at || '').localeCompare(String(a.last_inbound_at || '')));
       const awaitingCount = waiting.filter((l) => l.awaitingUs).length;
 
@@ -474,7 +493,7 @@ function makeApp() {
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
         : esc(l.top_app || '');
 
-      const rows = shown.slice(0, 500).map((l) => `<tr>
+      const rows = shown.slice(0, 500).map((l) => `<tr${l.needsReply ? ' class="needsreply"' : ''}>
         <td title="${esc(l.name)}"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></td>
         <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}${appBadge(l)}</td>
         <td title="${l.platform === 'ios' ? 'iOS' : 'Android'}">${l.platform === 'ios' ? '🍎' : '🤖'}</td>
@@ -496,7 +515,10 @@ function makeApp() {
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
         <td class="ell" title="${esc(l.reply_snippet)}">${l.reply_snippet
-          ? `<a href="/reply/${l.id}" title="Read it and draft an answer that matches what they said">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
+          ? `${l.needsReply
+              ? `<a href="/reply/${l.id}" class="unanswered" title="They wrote${l.awaitingUs ? ' again, after your last reply' : ''} and you have not answered yet${l.last_inbound_at ? ' — ' + esc(agoLabel(l.last_inbound_at)) : ''}"
+                  >↩ NEEDS REPLY</a> `
+              : ''}<a href="/reply/${l.id}" title="Read it and draft an answer that matches what they said">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
           : ''}</td>
         <td class="muted">${esc(l.grp)}</td>
         <td style="white-space:nowrap">
@@ -963,10 +985,15 @@ function makeApp() {
         catch (e) { thread = []; }
       }
 
-      const d = await replydraft.draftSmart({
-        lead, thread, intentOverride: chosen, instruction, useAI: wantAI
-      });
       const aiOn = await ai.isEnabled();
+      // Render immediately with the instant rule-based draft. The Claude call
+      // takes tens of seconds, and blocking the page on it meant staring at a
+      // blank tab; the browser fetches the AI draft afterwards and swaps it in.
+      const wantsAsyncAI = aiOn && wantAI;
+      const d = await replydraft.draftSmart({
+        lead, thread, intentOverride: chosen, instruction,
+        useAI: wantsAsyncAI ? false : wantAI
+      });
       const dry = await liveMode.isDry();
       const guard = screenReason({ name: lead.name, email: lead.email, notes: lead.notes, topApp: lead.top_app });
 
@@ -1007,7 +1034,11 @@ function makeApp() {
 
         <form method="get" action="/reply/${lead.id}" class="card stack" style="padding:1rem;max-width:820px;margin-top:1rem">
           <b>🎯 How this was written</b>
-          <div class="muted" style="font-size:.85rem;margin:.3rem 0 .6rem">
+          ${wantsAsyncAI ? `<div id="aistate" class="muted" style="font-size:.85rem;margin:.3rem 0 .6rem">
+            <span style="color:#0A66C2;font-weight:600">✨ Claude is writing a reply…</span>
+            you can start editing the draft below now — it will be replaced when Claude is done.
+          </div>` : ''}
+          <div class="muted" style="font-size:.85rem;margin:.3rem 0 .6rem"${wantsAsyncAI ? ' hidden id="aifallbackline"' : ''}>
             ${d.source === 'ai'
               ? `<span style="color:#059669;font-weight:600">✨ Claude wrote this</span> for their actual message.
                  Read as: <b>${esc(d.label)}</b>${d.why ? ' - ' + esc(d.why) : ''}`
@@ -1053,8 +1084,85 @@ function makeApp() {
             <a href="/">Cancel</a>
           </div>
         </form>
+
+        ${wantsAsyncAI ? `<script>
+        (function(){
+          var url = ${JSON.stringify('/reply/' + lead.id + '/ai?intent=' +
+            encodeURIComponent(chosen) + '&instruction=' + encodeURIComponent(instruction))};
+          var state = document.getElementById('aistate');
+          var fallbackLine = document.getElementById('aifallbackline');
+          var box = document.querySelector('textarea[name=text]');
+          var subj = document.querySelector('input[name=subject]');
+          var touched = false;
+          // Never overwrite something the operator has already started typing.
+          box.addEventListener('input', function(){ touched = true; });
+          // The label and reasoning are model output, so escape them rather
+          // than trusting them into innerHTML.
+          function esc(s){
+            return String(s == null ? '' : s)
+              .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          }
+
+          fetch(url, { headers: { 'Accept': 'application/json' } })
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+              if(!d.ok){
+                state.hidden = true;
+                if(fallbackLine) fallbackLine.hidden = false;
+                return;
+              }
+              if(touched){
+                state.innerHTML = '<span style="color:#b45309;font-weight:600">✨ Claude finished, ' +
+                  'but you had already started editing</span> — your text was kept. ' +
+                  '<a href="' + location.href + '">Reload to use Claude\\'s version</a>.';
+                return;
+              }
+              if(d.subject) subj.value = d.subject;
+              box.value = d.text;
+              state.innerHTML = '<span style="color:#059669;font-weight:600">✨ Claude wrote this</span> ' +
+                'for their latest message. Read as: <b>' + esc(d.label) + '</b>' +
+                (d.why ? ' — ' + esc(d.why) : '');
+            })
+            .catch(function(){
+              state.hidden = true;
+              if(fallbackLine) fallbackLine.hidden = false;
+            });
+        })();
+        </script>` : ''}
       `));
     } catch (e) { return back(res, '⚠️ Could not draft a reply: ' + e.message); }
+  });
+
+  // The Claude draft, fetched by the page after it has already rendered.
+  // Returns JSON; a failure here just leaves the rule-based draft in place.
+  app.get('/reply/:id/ai', async (req, res) => {
+    try {
+      const r = await db.q('SELECT * FROM leads WHERE id = $1', [req.params.id]);
+      const lead = r.rows[0];
+      if (!lead) return res.status(404).json({ ok: false, error: 'lead not found' });
+
+      let thread = [];
+      if (lead.reply_thread || lead.thread_id) {
+        try { thread = await email.fetchThread(lead.reply_thread || lead.thread_id); }
+        catch (e) { thread = []; }
+      }
+      const d = await replydraft.draftSmart({
+        lead, thread,
+        intentOverride: String(req.query.intent || ''),
+        instruction: String(req.query.instruction || ''),
+        useAI: true
+      });
+      res.json({
+        ok: d.source === 'ai',
+        source: d.source,
+        error: d.aiError || '',
+        label: d.label || '',
+        why: d.why || '',
+        subject: d.subject || '',
+        text: d.text || '',
+        pushesForMeeting: !!d.pushesForMeeting
+      });
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
 
   app.post('/reply/:id/send', async (req, res) => {

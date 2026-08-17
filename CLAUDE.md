@@ -166,6 +166,16 @@ replied is the case that matters most, and a first-reply-only test misses it ent
 - **The reply watcher writes to the DB in dry mode.** DRY_RUN means no email leaves the building;
   reading the inbox and recording what was found is observation. It used to skip the writes, which
   left the dashboard blank on the one setting people test in. Only the alert email is gated.
+- **`needsReply` is computed once, on the lead objects**, and drives the banner, the row stripe and
+  the counts alike — one definition, not three.
+- The row stripe hangs off the **pinned first cell**, because the Reply column scrolls out of view.
+
+### The reply page loads in two stages
+
+`GET /reply/:id` renders immediately with the rule-based draft; the browser then calls
+`GET /reply/:id/ai` and swaps in Claude's version. Blocking the render on the model meant 10-40s of
+blank tab. Two rules the swap must keep: it **never overwrites text the operator has already typed**
+(it says so instead), and model output is escaped client-side before it reaches `innerHTML`.
 - **House rules live in the system prompt as constraints, not suggestions**: the view-only access
   ask, no invented facts, never state a price, short hyphens only. `sanitize()` re-scrubs em/en
   dashes afterwards anyway, because that one is an explicit owner requirement.
