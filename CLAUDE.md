@@ -312,6 +312,30 @@ counting loop and a filter branch that must be kept in sync.
 - `.tile:hover` repeats `text-decoration:none` because the global `a:hover` rule is more specific
   than `.tile` and would underline the number and the label.
 
+### The filter/search follows you, until you explicitly clear it
+
+Entering a lead (Preview, Reply) and coming back, or changing its status inline, used to reset the
+table to the unfiltered default view — a search or a `?view=` tile click was silently lost the moment
+you touched a row. Every link and form that leaves the current `/` page now carries the page's own
+`req.url` (view, search box, every column filter, all of it) as a `back` field — a hidden input on
+POST/GET forms, a `?back=` query param on plain links — and everything that returns to the list reads
+it back with `backUrl(req)` / `safeBack()` instead of hard-coding `/`.
+
+- **`safeBack()` is the only thing allowed to decide where "back" goes.** It accepts a same-origin
+  path+query (`/^\/(?!\/|\\)\S*$/`) and rejects anything else — a bare `//evil.com` or `\\evil.com`
+  both parse as protocol-relative in some browsers, so this is a real open-redirect guard, not
+  decoration, even though the value only ever originates from our own rendered HTML.
+- **`back(res, m)` reads `res.req`** (Express's own back-reference from response to request) rather
+  than taking `req` as a parameter, so every one of its ~40 existing call sites kept working
+  unchanged — only the sites that used to `res.redirect('/')` directly needed a one-line edit to
+  `res.redirect(backUrl(req))`.
+- **Preview and Reply don't just read `back` for their own "Back to list" — they forward it.** Their
+  own Send/Rewrite/LinkedIn-lookup forms carry the same value in a hidden field, so sending from
+  Preview or rewriting from Reply still lands you back on the filtered list two hops later, not on
+  whatever page you happened to be looking at when you clicked in.
+- **Only an explicit "Clear filters" or a tile's "← Back to all" hard-codes `/`.** Those are the one
+  place a reset is the point; nothing else should ever silently produce the same effect.
+
 ### The LinkedIn column
 
 A **blue** LinkedIn icon is a real link — a profile or company page found on the studio's own site.

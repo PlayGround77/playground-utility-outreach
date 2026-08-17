@@ -63,6 +63,21 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+/**
+ * A same-origin path+query, safe to redirect to. Rejects anything that could
+ * send the browser off-site (a bare "//evil.com" or "\\evil.com" both parse as
+ * protocol-relative in some browsers) - this only ever carries our own "come
+ * back to this filtered view" URL, never a value we'd want to leave unchecked.
+ */
+function safeBack(v) {
+  const s = String(v || '');
+  return /^\/(?!\/|\\)\S*$/.test(s) ? s : '';
+}
+/** Where a POST/GET should return to: the "back" it was sent, or the list. */
+function backUrl(req) {
+  return safeBack(req.body && req.body.back) || safeBack(req.query && req.query.back) || '/';
+}
 function safeEqual(a, b) {
   const ba = Buffer.from(a || ''), bb = Buffer.from(b || '');
   if (ba.length !== bb.length) return false;
@@ -158,13 +173,14 @@ function optionList(opts, current) {
   return opts.map((o) =>
     `<option value="${esc(o)}"${o === current ? ' selected' : ''}>${esc(o || '—')}</option>`).join('');
 }
-function selectCell(id, name, opts, current) {
+function selectCell(id, name, opts, current, backHere) {
   const c = STATUS_COLOR[current] || '';
   const style = c ? ` style="border-left:4px solid ${c}"` : '';
   const title = name === 'outreach'
     ? 'Outreach status — where this lead is in the sequence. Set automatically as emails go out; change here to override.'
     : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call” / “Not Relevant” yourself.';
   return `<form method="post" action="/action/${id}/set" class="sel">
+    <input type="hidden" name="back" value="${esc(backHere)}">
     <select name="${name}" title="${esc(title)}" onchange="this.form.submit()"${style}>${optionList(opts, current)}</select>
   </form>`;
 }
@@ -544,6 +560,15 @@ function makeApp() {
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
         : esc(l.top_app || '');
 
+      // Where this exact filtered/searched view lives, so entering a lead
+      // (Preview, Reply) or changing its status and coming back lands you back
+      // on it - never silently reset to the unfiltered list. Carried as a
+      // hidden field on every form and a query param on every link that leaves
+      // this page; only "Clear filters" or the ← Back to all on a tile removes
+      // it, both by navigating to a plain "/" on purpose.
+      const backHere = req.url;
+      const backQS = '?back=' + encodeURIComponent(backHere);
+
       const rows = shown.slice(0, 500).map((l) => `<tr${l.needsReply ? ' class="needsreply"' : ''}>
         <td title="${esc(l.name)}"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></td>
         <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}${appBadge(l)}</td>
@@ -564,20 +589,20 @@ function makeApp() {
         <td class="ell">${phoneCell(l)}</td>
         <td class="muted">${esc(l.country)}</td>
         <td>${findPersonCell(l)}</td>
-        <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
-        <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response)}</td>
+        <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach, backHere)}</td>
+        <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response, backHere)}</td>
         <td class="ell" title="${esc(l.reply_snippet)}">${l.reply_snippet
           ? `${l.needsReply
-              ? `<a href="/reply/${l.id}" class="unanswered" title="They wrote${l.awaitingUs ? ' again, after your last reply' : ''} and you have not answered yet${l.last_inbound_at ? ' — ' + esc(agoLabel(l.last_inbound_at)) : ''}"
+              ? `<a href="/reply/${l.id}${backQS}" class="unanswered" title="They wrote${l.awaitingUs ? ' again, after your last reply' : ''} and you have not answered yet${l.last_inbound_at ? ' — ' + esc(agoLabel(l.last_inbound_at)) : ''}"
                   >↩ NEEDS REPLY</a> `
-              : ''}<a href="/reply/${l.id}" title="Read it and draft an answer that matches what they said">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
+              : ''}<a href="/reply/${l.id}${backQS}" title="Read it and draft an answer that matches what they said">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
           : ''}</td>
         <td class="muted">${esc(l.grp)}</td>
         <td style="white-space:nowrap">
-          <form method="get" action="/preview/${l.id}"><button title="See the exact email that will be sent to this lead">👁 Preview</button></form>
-          <form method="post" action="/action/${l.id}/send" onsubmit="return confirm('Send the next email in the sequence to this lead now?')"><button class="send" title="Send the next email (initial → FU1 → FU2) to THIS lead now. Respects DRY_RUN.">✉ Send</button></form>
-          <form method="post" action="/action/${l.id}/block"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form>
-          <form method="post" action="/action/${l.id}/delete" onsubmit="return confirm('Delete this lead permanently? (Block is better for junk — it also prevents re-sourcing.)')"><button title="Delete this lead permanently from the database">🗑</button></form>
+          <form method="get" action="/preview/${l.id}"><input type="hidden" name="back" value="${esc(backHere)}"><button title="See the exact email that will be sent to this lead">👁 Preview</button></form>
+          <form method="post" action="/action/${l.id}/send" onsubmit="return confirm('Send the next email in the sequence to this lead now?')"><input type="hidden" name="back" value="${esc(backHere)}"><button class="send" title="Send the next email (initial → FU1 → FU2) to THIS lead now. Respects DRY_RUN.">✉ Send</button></form>
+          <form method="post" action="/action/${l.id}/block"><input type="hidden" name="back" value="${esc(backHere)}"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form>
+          <form method="post" action="/action/${l.id}/delete" onsubmit="return confirm('Delete this lead permanently? (Block is better for junk — it also prevents re-sourcing.)')"><input type="hidden" name="back" value="${esc(backHere)}"><button title="Delete this lead permanently from the database">🗑</button></form>
         </td>
       </tr>`).join('');
 
@@ -644,7 +669,7 @@ function makeApp() {
               ${l.awaitingUs ? '<span class="pill" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5;margin-left:.4rem;font-size:.68rem">↩ replied after you</span>' : ''}
               ${Number(l.reply_count) > 1 ? `<span class="muted" style="font-size:.72rem;margin-left:.4rem">${l.reply_count} messages</span>` : ''}
               <span class="muted" style="font-size:.72rem;margin-left:.4rem">${esc(agoLabel(l.last_inbound_at))}</span>
-              <a href="/reply/${l.id}" style="margin-left:.4rem;font-weight:600">✍️ Draft a reply →</a>
+              <a href="/reply/${l.id}${backQS}" style="margin-left:.4rem;font-weight:600">✍️ Draft a reply →</a>
               ${l.reply_thread ? `<a href="https://mail.google.com/mail/u/0/#inbox/${esc(l.reply_thread)}" target="_blank" rel="noopener" style="margin-left:.4rem">open in Gmail →</a>` : ''}
               <div style="opacity:.85;font-style:italic;margin-top:.2rem">“${esc(l.reply_snippet)}”</div>
             </div>`).join('')}
@@ -753,7 +778,7 @@ function makeApp() {
           </form>
         </details>
 
-        <form id="bulkform" method="post" action="/bulk"></form>
+        <form id="bulkform" method="post" action="/bulk"><input type="hidden" name="back" value="${esc(backHere)}"></form>
         <div class="bar" style="margin:.4rem 0">
           <label title="Check/uncheck every row currently shown (respects the active filters)"><input type="checkbox" onclick="document.querySelectorAll('.rowchk').forEach(function(c){c.checked=this.checked}.bind(this))"> Select all shown</label>
           <button form="bulkform" name="action" value="block" onclick="return confirm('Block the selected leads?')" title="Move every checked row to the Block List — never contacted again">⛔ Block selected</button>
@@ -904,11 +929,11 @@ function makeApp() {
     if ('outreach' in req.body) patch.outreach = String(req.body.outreach);
     if ('response' in req.body) patch.response = String(req.body.response);
     if (Object.keys(patch).length) await db.updateLead(Number(req.params.id), patch);
-    res.redirect('/');
+    res.redirect(backUrl(req));
   });
   app.post('/action/:id/block', async (req, res) => {
     await db.updateLead(Number(req.params.id), { grp: config.groups.blockList });
-    res.redirect('/');
+    res.redirect(backUrl(req));
   });
   app.post('/action/:id/delete', async (req, res) => {
     try { await db.deleteLead(Number(req.params.id)); return back(res, 'Lead deleted.'); }
@@ -928,7 +953,14 @@ function makeApp() {
     } catch (e) { return back(res, '⚠️ Bulk action failed: ' + e.message); }
     return back(res, `${action === 'delete' ? 'Deleted' : 'Blocked'} ${n} selected lead(s).`);
   });
-  const back = (res, m) => res.redirect('/?msg=' + encodeURIComponent(m));
+  // Returns to wherever the form/link that got here carried in its "back"
+  // field - the filtered/searched list you were on, not always the default
+  // view. res.req is Express's own back-reference to the request, so every
+  // existing back(res, msg) call site keeps working unchanged.
+  const back = (res, m) => {
+    const dest = backUrl(res.req);
+    res.redirect(dest + (dest.includes('?') ? '&' : '?') + 'msg=' + encodeURIComponent(m));
+  };
 
   // Preview the exact email that would be sent next to a lead.
   app.get('/preview/:id', async (req, res) => {
@@ -937,6 +969,9 @@ function makeApp() {
       const leads = await db.allLeads();
       const lead = leads.find((l) => String(l.id) === String(req.params.id));
       if (!lead) return res.status(404).send('Lead not found');
+      // Wherever the filtered/searched list was that got here - "Back to list"
+      // must return to it, not reset to the unfiltered default.
+      const backTo = safeBack(req.query.back) || '/';
       const S = config.statuses;
       let step, subject, html;
       if (!lead.outreach) { step = 'Initial'; const tp = templates.initial(lead); subject = tp.subject; html = tp.html; }
@@ -945,10 +980,10 @@ function makeApp() {
       else { step = 'Done'; }
 
       if (step === 'Done') {
-        return res.send(shell(`<p><a href="/">← Back</a></p><div class="banner">Sequence is complete for <b>${esc(lead.name)}</b> — no further email will be sent.</div>`));
+        return res.send(shell(`<p><a href="${esc(backTo)}">← Back</a></p><div class="banner">Sequence is complete for <b>${esc(lead.name)}</b> — no further email will be sent.</div>`));
       }
       res.send(shell(`
-        <p><a href="/">← Back to list</a></p>
+        <p><a href="${esc(backTo)}">← Back to list</a></p>
         <h1 style="font-size:1.2rem">Email preview — ${esc(lead.name)}</h1>
         <div class="card" style="padding:1rem;max-width:760px">
           <div><b>To:</b> ${esc(lead.email)}</div>
@@ -990,13 +1025,17 @@ function makeApp() {
           })()}
           <div style="margin-top:.7rem">
             <form method="post" action="/action/${lead.id}/linkedin">
+              <input type="hidden" name="back" value="${esc(backTo)}">
               <button title="Look the profile up automatically through Apify (searches Google's index of public LinkedIn profiles). Costs money per lookup, so use it on leads you actually intend to contact.">🔗 Look up LinkedIn automatically</button>
             </form>
           </div>
         </div>
         <p style="margin-top:1rem">
-          <form method="post" action="/action/${lead.id}/send" onsubmit="return confirm('Send this email now?')"><button class="send" title="Send this exact email now (respects DRY/LIVE mode)">✉ Send this now</button></form>
-          <a href="/" style="margin-left:.6rem">Cancel</a>
+          <form method="post" action="/action/${lead.id}/send" onsubmit="return confirm('Send this email now?')">
+            <input type="hidden" name="back" value="${esc(backTo)}">
+            <button class="send" title="Send this exact email now (respects DRY/LIVE mode)">✉ Send this now</button>
+          </form>
+          <a href="${esc(backTo)}" style="margin-left:.6rem">Cancel</a>
         </p>
         <p class="legend">This is exactly what the recipient will receive${dry ? ' — but DRY RUN is on, so “Send this now” only simulates.' : '.'}</p>
       `));
@@ -1025,7 +1064,7 @@ function makeApp() {
   // Legacy alias so a stale/cached page (old 📞/🚫 buttons) still works.
   app.post('/action/:id/respond', async (req, res) => {
     await db.updateLead(Number(req.params.id), { response: String(req.body.value || '') });
-    res.redirect('/');
+    res.redirect(backUrl(req));
   });
   // Draft an answer to a reply. The angle is chosen from what they actually
   // wrote, but nothing is sent until a human has read and edited it.
@@ -1038,6 +1077,10 @@ function makeApp() {
       const chosen = String(req.query.intent || '');
       const instruction = String(req.query.instruction || '');
       const wantAI = req.query.ai !== 'off';
+      // Wherever the filtered/searched list was that got here - every link and
+      // form on this page carries it forward, so "Back to list" (and Cancel,
+      // and Send) return there instead of resetting to the unfiltered default.
+      const backTo = safeBack(req.query.back) || '/';
 
       // Read the real conversation from Gmail. The watcher only stores a
       // 500-char snippet, which is not enough to answer a long reply properly.
@@ -1076,7 +1119,7 @@ function makeApp() {
         `<option value="${esc(i.intent)}" ${i.intent === d.intent ? 'selected' : ''}>${esc(i.label)}</option>`).join('');
 
       res.send(shell(`
-        <p><a href="/">← Back to list</a></p>
+        <p><a href="${esc(backTo)}">← Back to list</a></p>
         <h1 style="font-size:1.2rem">Reply to ${esc(lead.name)}</h1>
 
         <div class="card" style="padding:1rem;max-width:820px">
@@ -1108,6 +1151,7 @@ function makeApp() {
         </div>
 
         <form method="get" action="/reply/${lead.id}" class="card stack" style="padding:1rem;max-width:820px;margin-top:1rem">
+          <input type="hidden" name="back" value="${esc(backTo)}">
           <b>🎯 How this was written</b>
           ${wantsAsyncAI ? `<div id="aistate" class="muted" style="font-size:.85rem;margin:.3rem 0 .6rem">
             <span style="color:#0A66C2;font-weight:600">✨ Claude is writing a reply…</span>
@@ -1141,6 +1185,7 @@ function makeApp() {
 
         <form method="post" action="/reply/${lead.id}/send" class="card stack" style="padding:1rem;max-width:820px;margin-top:1rem"
               onsubmit="return confirm('Send this reply to ${esc(lead.email)}?')">
+          <input type="hidden" name="back" value="${esc(backTo)}">
           <b>✍️ Your reply</b>
           <div class="muted" style="font-size:.8rem;margin:.3rem 0 .6rem">
             To ${esc(lead.email)} - goes into the same Gmail thread. Write it as a normal email;
@@ -1185,7 +1230,7 @@ function makeApp() {
           ${guard ? `<div class="banner" style="margin:.6rem 0">⚠️ This lead trips a guard: <b>${esc(guard)}</b>. Sending is blocked.</div>` : ''}
           <div style="margin-top:.7rem;display:flex;gap:.6rem;align-items:center">
             <button class="send" ${guard ? 'disabled' : ''}>✉ Send reply${dry ? ' (dry run - nothing will leave)' : ''}</button>
-            <a href="/">Cancel</a>
+            <a href="${esc(backTo)}">Cancel</a>
           </div>
         </form>
 
