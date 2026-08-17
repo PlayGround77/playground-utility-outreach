@@ -226,6 +226,40 @@ can be made in writing. Three intents deliberately break that pattern and do not
 - **`form{display:inline}` is global in `server.js`.** Any form holding stacked content needs
   `class="stack"` or it gets no height and the next card renders on top of it.
 
+### Editing the draft with the AI
+
+`ai.transform({kind, option, text, selection, lead})` backs the toolbar above the reply textarea —
+tone, shorter/longer, another language, a free-text instruction, rephrasing just a selection, and
+translating one of *their* messages. One `POST /reply/:id/transform` route serves all of them and
+returns `{ok, text}`; `transform()` never throws, so a dead API is a line of status text, not a lost
+draft. It runs at `effort: 'low'` — these are edits, not fresh reasoning.
+
+- **Everything that rewrites OUR reply inherits the house rules** (`HOUSE`, plus the full
+  `systemPrompt()`), so "make it friendlier" cannot invent a price or slip in an em dash, and
+  `sanitize()` scrubs the result anyway. **Translating THEIR message is the deliberate exception**:
+  it is their text, a faithful translation is the whole point, and it gets a plain translator system
+  prompt, no house rules, no `leadContext()`, and no dash-scrubbing.
+- **`rephrase` returns only the replacement passage**, which the client splices back with
+  `value.slice(0,s) + text + value.slice(e)` and leaves selected. The button stays disabled until
+  something is actually selected (`selectionEnd > selectionStart`).
+- Translation is a **toggle**: the original is stashed in `dataset.original` and the button flips to
+  "↩ Show original". Never lose their real words behind a translation.
+- Unknown actions, an empty selection and an empty draft are all refused **before** the API call.
+
+### Who spoke last
+
+`needsReply` is derived from `last_inbound_at` vs `last_outbound_at`, so anything that answers a
+lead **must** stamp `last_outbound_at` — otherwise the dashboard nags about a lead you already
+answered. Replying from Gmail directly is the obvious way that happens, so there are two repairs:
+
+- **`scanInbox()` also scans `in:sent`** and returns `sentByThread` (newest message per thread,
+  compared by `internalDate` rather than trusting list order). The watcher adopts it **before** the
+  "already seen" `continue`, so it also fixes historical rows. `gmail.readonly` already covers this —
+  no re-consent. A failure there is logged and swallowed: losing the sent scan must not lose the
+  reply scan.
+- **Opening `/reply/:id` self-heals** from the fetched thread when its last message is `fromUs`.
+  The thread is the authority on who spoke last; our own stamp is only a cache of it.
+
 ### The LinkedIn column
 
 A **blue** LinkedIn icon is a real link — a profile or company page found on the studio's own site.

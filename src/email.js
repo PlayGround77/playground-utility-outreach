@@ -101,6 +101,26 @@ async function scanInbox(days) {
   const replyInfo = new Map();
   const bounceEmails = new Set();
 
+  // What WE sent, newest per thread. Without this the only record of a reply is
+  // the dashboard's own stamp, so answering from Gmail - or any reply sent
+  // before that stamp existed - leaves the lead looking unanswered forever.
+  const sentByThread = new Map();
+  try {
+    const sent = await g.users.messages.list({
+      userId: 'me', q: `in:sent newer_than:${days || 30}d`, maxResults: 200
+    });
+    for (const m of (sent.data.messages || [])) {
+      const full = await g.users.messages.get({ userId: 'me', id: m.id, format: 'minimal' });
+      const tid = full.data.threadId || '';
+      const at = Number(full.data.internalDate || 0);
+      if (!tid || !at) continue;
+      const prev = sentByThread.get(tid);
+      if (!prev || at > prev.at) sentByThread.set(tid, { at, isoAt: new Date(at).toISOString() });
+    }
+  } catch (e) {
+    console.log('[email] could not scan sent mail: ' + e.message);
+  }
+
   const list = await g.users.messages.list({ userId: 'me', q: `in:inbox newer_than:${days || 30}d`, maxResults: 200 });
   const ids = (list.data.messages || []).map((m) => m.id);
 
@@ -137,7 +157,7 @@ async function scanInbox(days) {
       }
     }
   }
-  return { replyEmails, replyInfo, bounceEmails };
+  return { replyEmails, replyInfo, bounceEmails, sentByThread };
 }
 
 /** Walk a Gmail MIME tree and pull out the text. Prefers text/plain over HTML. */

@@ -255,6 +255,15 @@ function shell(inner) {
   a.unanswered{display:inline-block;background:#f43f5e;color:#fff;font-size:.66rem;font-weight:700;
     letter-spacing:.03em;padding:.05rem .35rem;border-radius:999px;white-space:nowrap;text-decoration:none}
   a.unanswered:hover{background:#e11d48}
+  .aitools{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;padding:.5rem .6rem;
+    background:var(--chip);border:1px solid var(--line);border-radius:8px}
+  .aitools button{padding:.25rem .5rem;font-size:.8rem}
+  .aitools select,.aitools input{font:inherit;font-size:.8rem;padding:.22rem .3rem;
+    border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)}
+  .aitools button[disabled]{opacity:.45;cursor:not-allowed}
+  .tmsg{font-size:.7rem;padding:.05rem .35rem;border-radius:999px;border:1px solid var(--line);
+    background:var(--panel);color:var(--muted);cursor:pointer}
+  .tmsg:hover{color:var(--accent);border-color:var(--accent)}
   select{font:inherit;padding:.25rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
   .sel{display:block;margin:0}
   a{color:var(--accent);text-decoration:none}
@@ -375,6 +384,8 @@ function shell(inner) {
 function makeApp() {
   const app = express();
   app.use(express.urlencoded({ extended: false }));
+  // The editing tools post JSON. Capped because a draft is a few KB, not a file.
+  app.use(express.json({ limit: '256kb' }));
   app.get('/health', (req, res) => res.send('ok'));
   app.use(basicAuth);
 
@@ -985,6 +996,19 @@ function makeApp() {
         catch (e) { thread = []; }
       }
 
+      // The thread itself is the authority on who spoke last. Opening the page
+      // repairs a lead that looks unanswered only because the reply went out
+      // from Gmail rather than from here.
+      const lastMsg = thread[thread.length - 1];
+      if (lastMsg && lastMsg.fromUs) {
+        const at = Date.parse(lastMsg.date || '') || Date.now();
+        const iso = new Date(at).toISOString();
+        if (iso > String(lead.last_outbound_at || '')) {
+          try { await db.updateLead(lead.id, { last_outbound_at: iso }); lead.last_outbound_at = iso; }
+          catch (e) { /* cosmetic - never block the page on it */ }
+        }
+      }
+
       const aiOn = await ai.isEnabled();
       // Render immediately with the instant rule-based draft. The Claude call
       // takes tens of seconds, and blocking the page on it meant staring at a
@@ -1015,12 +1039,12 @@ function makeApp() {
                     background:${m.fromUs ? 'var(--chip)' : 'var(--panel)'};
                     border:1px solid ${last && !m.fromUs ? '#10b981' : 'var(--line)'};
                     ${m.fromUs ? 'margin-left:2.5rem' : 'margin-right:2.5rem'}">
-                    <div class="muted" style="font-size:.72rem;margin-bottom:.25rem">
-                      ${m.fromUs ? '↗ You' : '↩ ' + esc(lead.name)}
-                      ${m.date ? ' · ' + esc(m.date) : ''}
-                      ${last && !m.fromUs ? ' · <b style="color:#059669">latest — the draft answers this</b>' : ''}
+                    <div class="muted" style="font-size:.72rem;margin-bottom:.25rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+                      <span>${m.fromUs ? '↗ You' : '↩ ' + esc(lead.name)}${m.date ? ' · ' + esc(m.date) : ''}</span>
+                      ${last && !m.fromUs ? '<b style="color:#059669">latest — the draft answers this</b>' : ''}
+                      ${!m.fromUs && aiOn ? `<button type="button" class="tmsg" data-i="${i}">🌐 Translate</button>` : ''}
                     </div>
-                    <div style="white-space:pre-wrap">${esc(m.text)}</div>
+                    <div class="msgtext" data-i="${i}" style="white-space:pre-wrap">${esc(m.text)}</div>
                   </div>`;
                 }).join('')
               : (lead.reply_snippet
@@ -1074,6 +1098,24 @@ function makeApp() {
           <label style="display:block;font-size:.8rem;color:var(--muted)">Subject
             <input name="subject" value="${esc(d.subject)}" style="width:100%;margin-top:.2rem">
           </label>
+          ${aiOn ? `<div class="aitools" style="margin-top:.7rem">
+            <span class="muted" style="font-size:.75rem">Rewrite:</span>
+            <select id="t-tone"><option value="">Tone…</option>${
+              Object.keys(ai.TONES).map((k) => `<option value="${k}">${k[0].toUpperCase() + k.slice(1)}</option>`).join('')
+            }</select>
+            <button type="button" data-kind="length" data-option="shorter">Shorter</button>
+            <button type="button" data-kind="length" data-option="longer">Longer</button>
+            <select id="t-lang"><option value="">Language…</option>${
+              ['English', 'Spanish', 'Portuguese', 'French', 'German', 'Italian', 'Dutch', 'Polish',
+                'Russian', 'Turkish', 'Arabic', 'Hebrew', 'Hindi', 'Indonesian', 'Vietnamese',
+                'Chinese', 'Japanese', 'Korean'].map((l) => `<option>${l}</option>`).join('')
+            }</select>
+            <button type="button" id="t-sel" disabled
+              title="Select a sentence in the draft first, then click this to rephrase just that part">✏️ Rephrase selection</button>
+            <input id="t-custom" placeholder="or tell it what to change…" style="min-width:190px">
+            <button type="button" id="t-go">Apply</button>
+            <span id="t-state" class="muted" style="font-size:.78rem"></span>
+          </div>` : ''}
           <textarea name="text" rows="24" spellcheck="true"
             style="width:100%;margin-top:.7rem;padding:.7rem;border:1px solid var(--line);border-radius:8px;
                    background:var(--bg);color:var(--ink);font:inherit;line-height:1.6;resize:vertical"
@@ -1084,6 +1126,102 @@ function makeApp() {
             <a href="/">Cancel</a>
           </div>
         </form>
+
+        ${aiOn ? `<script>
+        (function(){
+          var LEAD = ${lead.id};
+          var box = document.querySelector('textarea[name=text]');
+          var state = document.getElementById('t-state');
+          var selBtn = document.getElementById('t-sel');
+          var tone = document.getElementById('t-tone');
+          var lang = document.getElementById('t-lang');
+          var custom = document.getElementById('t-custom');
+
+          function busy(on, what){
+            state.textContent = on ? ('✨ ' + what + '…') : '';
+            document.querySelectorAll('.aitools button, .aitools select, .aitools input')
+              .forEach(function(el){ el.disabled = on; });
+            if(!on) syncSel();
+          }
+          function post(body){
+            return fetch('/reply/' + LEAD + '/transform', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            }).then(function(r){ return r.json(); });
+          }
+          // Enable "rephrase selection" only when something is actually selected.
+          function syncSel(){
+            if(!selBtn) return;
+            selBtn.disabled = !(box.selectionEnd > box.selectionStart);
+          }
+          ['select','keyup','mouseup','input','focus'].forEach(function(ev){
+            box.addEventListener(ev, syncSel);
+          });
+          syncSel();
+
+          function apply(kind, option){
+            busy(true, 'rewriting');
+            post({ kind: kind, option: option, text: box.value }).then(function(d){
+              busy(false);
+              if(!d.ok){ state.textContent = '⚠️ ' + (d.error || 'failed'); return; }
+              box.value = d.text;
+              state.textContent = '✓ updated';
+            }).catch(function(){ busy(false); state.textContent = '⚠️ request failed'; });
+          }
+
+          document.querySelectorAll('.aitools button[data-kind]').forEach(function(b){
+            b.addEventListener('click', function(){ apply(b.dataset.kind, b.dataset.option); });
+          });
+          if(tone) tone.addEventListener('change', function(){ if(tone.value) apply('tone', tone.value); });
+          if(lang) lang.addEventListener('change', function(){ if(lang.value) apply('language', lang.value); });
+
+          var go = document.getElementById('t-go');
+          if(go) go.addEventListener('click', function(){
+            if(!custom.value.trim()){ state.textContent = 'Type what to change first.'; return; }
+            apply('custom', custom.value.trim());
+          });
+
+          // Rephrase just the highlighted passage, splicing the result back in.
+          if(selBtn) selBtn.addEventListener('click', function(){
+            var s = box.selectionStart, e = box.selectionEnd;
+            var sel = box.value.slice(s, e);
+            if(!sel.trim()){ state.textContent = 'Select some text first.'; return; }
+            busy(true, 'rephrasing the selection');
+            post({ kind: 'rephrase', selection: sel, text: box.value }).then(function(d){
+              busy(false);
+              if(!d.ok){ state.textContent = '⚠️ ' + (d.error || 'failed'); return; }
+              box.value = box.value.slice(0, s) + d.text + box.value.slice(e);
+              box.focus();
+              box.setSelectionRange(s, s + d.text.length);   // leave it selected to compare
+              state.textContent = '✓ passage rewritten';
+            }).catch(function(){ busy(false); state.textContent = '⚠️ request failed'; });
+          });
+
+          // Translate one of their messages in place, keeping the original.
+          document.querySelectorAll('button.tmsg').forEach(function(b){
+            b.addEventListener('click', function(){
+              var target = document.querySelector('.msgtext[data-i="' + b.dataset.i + '"]');
+              if(!target) return;
+              if(target.dataset.original){          // toggle back
+                target.textContent = target.dataset.original;
+                delete target.dataset.original;
+                b.textContent = '🌐 Translate';
+                return;
+              }
+              var original = target.textContent;
+              b.disabled = true; b.textContent = '🌐 translating…';
+              post({ kind: 'translate', option: 'English', text: original }).then(function(d){
+                b.disabled = false;
+                if(!d.ok){ b.textContent = '⚠️ ' + (d.error || 'failed'); return; }
+                target.dataset.original = original;
+                target.textContent = d.text;
+                b.textContent = '↩ Show original';
+              }).catch(function(){ b.disabled = false; b.textContent = '⚠️ failed'; });
+            });
+          });
+        })();
+        </script>` : ''}
 
         ${wantsAsyncAI ? `<script>
         (function(){
@@ -1162,6 +1300,24 @@ function makeApp() {
         text: d.text || '',
         pushesForMeeting: !!d.pushesForMeeting
       });
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+
+  // Editing tools: tone, length, language, rephrase-a-selection, and translating
+  // their message. All go through one endpoint and return JSON.
+  app.post('/reply/:id/transform', async (req, res) => {
+    try {
+      const r = await db.q('SELECT * FROM leads WHERE id = $1', [req.params.id]);
+      const lead = r.rows[0];
+      if (!lead) return res.status(404).json({ ok: false, error: 'lead not found' });
+      const out = await ai.transform({
+        kind: String(req.body.kind || ''),
+        option: String(req.body.option || ''),
+        text: String(req.body.text || ''),
+        selection: String(req.body.selection || ''),
+        lead
+      });
+      res.json(out);
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
 

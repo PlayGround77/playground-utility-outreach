@@ -293,6 +293,133 @@ async function draftReply({ lead, thread, replySnippet, instruction }) {
   }
 }
 
+/* --------------------------------------------------------------- transforms */
+
+/**
+ * Editing tools for a draft that already exists: change the tone, the length or
+ * the language, rephrase one selected sentence, or translate their message into
+ * something you can read.
+ *
+ * The split that matters: everything that rewrites OUR reply inherits the house
+ * rules, so a friendlier tone can't invent a price or slip in an em dash.
+ * Translating THEIR message is the exception - it is their text, and a faithful
+ * translation is the whole point, so the house rules are deliberately not
+ * applied to it.
+ */
+const TONES = {
+  professional: 'More professional and businesslike, without becoming stiff or corporate.',
+  friendly: 'Warmer and more personable, like writing to someone you like. Still concise.',
+  direct: 'Blunter and shorter. Cut hedging and pleasantries, lead with the point.',
+  warm: 'More appreciative and encouraging about what they have built, without flattery.',
+  firm: 'Firmer and more confident, making clear what we need to move forward. Never rude.',
+  apologetic: 'Acknowledge the friction or the mistake, briefly and without grovelling.',
+  enthusiastic: 'More visibly interested and energetic about their app. No exclamation marks.'
+};
+
+const LENGTHS = {
+  shorter: 'Cut it to roughly half the length. Keep every substantive point, drop the padding.',
+  longer: 'Expand it a little: explain the reasoning behind what we are asking for. Stay under 300 words.'
+};
+
+const HOUSE = `Keep every hard rule: only short hyphens (-), never an em or en dash; invent no
+facts, numbers, deals or names; never state a price or a range; no corporate filler and no emoji;
+keep the same sign-off. Do not answer anything the original draft did not answer.`;
+
+/** What to ask for, per action. Returns null for an unknown action. */
+function transformBrief({ kind, option, selection }) {
+  if (kind === 'tone') {
+    const t = TONES[option];
+    return t && `Rewrite the reply below in this register: ${t}\n\n${HOUSE}`;
+  }
+  if (kind === 'length') {
+    const l = LENGTHS[option];
+    return l && `Rewrite the reply below. ${l}\n\n${HOUSE}`;
+  }
+  if (kind === 'language') {
+    const lang = String(option || '').trim();
+    return lang && `Rewrite the reply below entirely in ${lang}, as a fluent native speaker would ` +
+      `write it - a natural business email, not a literal translation. Keep names, the company ` +
+      `name and email addresses as they are.\n\n${HOUSE}`;
+  }
+  if (kind === 'rephrase') {
+    if (!selection) return null;
+    return `Below is a reply, and one passage from it marked out. Rewrite ONLY that passage. ` +
+      `It must drop into the same place and read naturally with the sentences around it. ` +
+      `Return only the replacement passage - no quotes, no preamble, no surrounding text.\n\n` +
+      `The passage to rewrite:\n"""${selection}"""\n\n${HOUSE}`;
+  }
+  if (kind === 'custom') {
+    const note = String(option || '').trim();
+    return note && `Rewrite the reply below according to this instruction: ${note}\n\n${HOUSE}`;
+  }
+  if (kind === 'translate') {
+    const lang = String(option || 'English').trim() || 'English';
+    // Their words, not ours - translate faithfully rather than improving it.
+    return `Translate the message below into ${lang}. Translate faithfully, including the tone ` +
+      `and any hedging: do not summarise, soften, or answer it. If it is already in ${lang}, ` +
+      `return it unchanged. Return only the translation.`;
+  }
+  return null;
+}
+
+const TEXT_SCHEMA = {
+  type: 'object',
+  properties: { text: { type: 'string', description: 'The rewritten text, plain, no quotes around it.' } },
+  required: ['text'],
+  additionalProperties: false
+};
+
+/**
+ * Run one editing action. Returns { ok, text, error } and never throws.
+ * `text` is the whole rewritten draft, except for 'rephrase' where it is just
+ * the replacement for the selected passage.
+ */
+async function transform({ kind, option, text, selection, lead }) {
+  const key = await apiKey();
+  if (!key) return { ok: false, error: 'no ANTHROPIC_API_KEY set' };
+  if (!(await underCap())) return { ok: false, error: 'daily AI call cap reached' };
+
+  const brief = transformBrief({ kind, option, selection });
+  if (!brief) return { ok: false, error: 'unknown or incomplete action' };
+  const body = String(text || '').trim();
+  if (!body) return { ok: false, error: 'nothing to work on' };
+
+  const isOurs = kind !== 'translate';
+  const system = isOurs
+    ? systemPrompt() + `\n\nYou are now EDITING an existing draft rather than writing a new one. ` +
+      `Change only what the instruction asks for and leave the substance alone.`
+    : `You are a translator. Translate accurately and idiomatically. Never add commentary.`;
+
+  const user = brief + '\n\n' +
+    (isOurs && lead ? `Context on the lead, for names and facts only:\n${leadContext(lead)}\n\n` : '') +
+    `---\n${body}\n---`;
+
+  const client = new Anthropic({ apiKey: key, timeout: TIMEOUT_MS, maxRetries: MAX_RETRIES });
+  try {
+    await countCall();
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'low', format: { type: 'json_schema', schema: TEXT_SCHEMA } },
+      system,
+      messages: [{ role: 'user', content: user }]
+    });
+    if (res.stop_reason === 'refusal') return { ok: false, error: 'the model declined this one' };
+
+    const raw = (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+    let out;
+    try { out = JSON.parse(raw); } catch (e) { return { ok: false, error: 'could not parse the response' }; }
+    if (!out || typeof out.text !== 'string' || !out.text.trim()) {
+      return { ok: false, error: 'empty response' };
+    }
+    // Their translated words keep their own punctuation; ours get scrubbed.
+    return { ok: true, text: isOurs ? sanitize(out.text) : out.text.trim() };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
 /**
  * Last line of defence on the house style. The model is told not to use em or en
  * dashes, but this is an explicit owner requirement for anything a recipient
@@ -307,6 +434,7 @@ function sanitize(body) {
 }
 
 module.exports = {
-  draftReply, isEnabled, keyStatus, setKey, testKey,
-  systemPrompt, leadContext, threadBlock, sanitize, MODEL, DAILY_CAP, KEY_SETTING
+  draftReply, transform, transformBrief, isEnabled, keyStatus, setKey, testKey,
+  systemPrompt, leadContext, threadBlock, sanitize,
+  TONES, LENGTHS, MODEL, DAILY_CAP, KEY_SETTING
 };

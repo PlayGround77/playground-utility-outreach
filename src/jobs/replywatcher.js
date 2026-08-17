@@ -46,6 +46,15 @@ async function runReplyWatcher() {
         const isNewer = !!info.isoAt && info.isoAt > seenAt;
         const isFirst = !lead.response && !seenAt;
 
+        // Gmail is the authority on whether we have answered, not our own
+        // stamp: replying from Gmail never touches the dashboard.
+        const tid = info.threadId || lead.reply_thread || lead.thread_id || '';
+        const ourSent = (scan.sentByThread && scan.sentByThread.get(tid)) || null;
+        if (ourSent && ourSent.isoAt > String(lead.last_outbound_at || '')) {
+          await db.updateLead(lead.id, { last_outbound_at: ourSent.isoAt });
+          lead.last_outbound_at = ourSent.isoAt;
+        }
+
         if (!isNewer && seenAt) { log('REPLY (already seen) ' + lead.name); continue; }
 
         const patch = {
