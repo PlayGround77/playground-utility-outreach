@@ -185,7 +185,34 @@ function countryName(code) {
   return s;
 }
 
+/**
+ * Digits only, keeping a leading + (00 prefix normalised to +). Returns '' for
+ * anything that cannot be a real number, so a junk value is dropped rather than
+ * rendered as a callable link: too short, longer than E.164 allows, or a
+ * placeholder (0000000, 1234567890 - what a template site ships with).
+ */
+function normalisePhone(raw) {
+  const s = String(raw || '').trim();
+  const plus = /^\+/.test(s) || /^00/.test(s);
+  const digits = s.replace(/\D/g, '').replace(/^00/, '');
+  if (digits.length < 7 || digits.length > 15) return '';
+  if (/^(\d)\1+$/.test(digits)) return '';
+  if (digits === '1234567890' || digits === '123456789') return '';
+  return (plus ? '+' : '') + digits;
+}
+
+/**
+ * Tidy a published number for display, keeping THEIR formatting. We do not know
+ * where the country code ends for most of these, so any regrouping we invented
+ * would read worse than the spacing the studio itself chose. Returns '' when
+ * the number does not validate, so display and tel: link never disagree.
+ */
+function displayPhone(raw) {
+  if (!normalisePhone(raw)) return '';
+  return String(raw || '').trim().replace(/\s+/g, ' ').slice(0, 32);
+}
+
 module.exports = {
   nameFromEmail, looksLikePerson, linkedinSearches, cleanStudio, countryName,
-  ROLE_LOCALPARTS
+  normalisePhone, displayPhone, ROLE_LOCALPARTS
 };

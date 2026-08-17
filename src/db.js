@@ -46,6 +46,8 @@ async function init() {
       website       TEXT NOT NULL DEFAULT '',
       contact_name  TEXT NOT NULL DEFAULT '',
       contact_name_source TEXT NOT NULL DEFAULT '',
+      phone         TEXT NOT NULL DEFAULT '',
+      phone_source  TEXT NOT NULL DEFAULT '',
       linkedin_url  TEXT NOT NULL DEFAULT '',
       country       TEXT NOT NULL DEFAULT '',
       site_checked_at TEXT NOT NULL DEFAULT '',
@@ -89,6 +91,8 @@ async function init() {
     "website TEXT NOT NULL DEFAULT ''",
     "contact_name TEXT NOT NULL DEFAULT ''",
     "contact_name_source TEXT NOT NULL DEFAULT ''",
+    "phone TEXT NOT NULL DEFAULT ''",
+    "phone_source TEXT NOT NULL DEFAULT ''",
     "linkedin_url TEXT NOT NULL DEFAULT ''",
     "country TEXT NOT NULL DEFAULT ''",
     "site_checked_at TEXT NOT NULL DEFAULT ''",
@@ -140,8 +144,8 @@ async function insertLead(lead) {
         category,installs_day,installs_month,revenue_month,apps_count,rating_avg,rating_count,
         installs_total,rev_per_install,has_iap,has_ads,website,last_update,opportunity,
         review_signals,review_evidence,platform,
-        contact_name,contact_name_source,linkedin_url,country,site_checked_at)
-     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30
+        contact_name,contact_name_source,linkedin_url,country,site_checked_at,phone,phone_source)
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
      WHERE $2 = '' OR NOT EXISTS (SELECT 1 FROM leads WHERE email <> '' AND lower(email) = lower($2))
      RETURNING id`,
     [lead.name, lead.email, lead.priority || 0, lead.topApp || '', appsJson, lead.storeLink || '',
@@ -152,7 +156,7 @@ async function insertLead(lead) {
       lead.website || '', lead.lastUpdate || '', lead.opportunity || 0,
       lead.reviewSignals || 0, lead.reviewEvidence || '', lead.platform || 'android',
       lead.contactName || '', lead.contactNameSource || '', lead.linkedin || '',
-      lead.country || '', lead.siteCheckedAt || '']
+      lead.country || '', lead.siteCheckedAt || '', lead.phone || '', lead.phoneSource || '']
   );
   return r.rows.length ? r.rows[0].id : null;
 }
@@ -304,10 +308,10 @@ async function leadsNeedingEnrichment(limit, staleDays) {
   const cutoff = new Date(Date.now() - (staleDays || 30) * 86400000)
     .toISOString().slice(0, 10);
   const r = await q(
-    `SELECT id, name, email, website, top_app, country, contact_name, linkedin_url
+    `SELECT id, name, email, website, top_app, country, contact_name, linkedin_url, phone
        FROM leads
       WHERE trim(website) <> ''
-        AND (trim(contact_name) = '' OR trim(linkedin_url) = '')
+        AND (trim(contact_name) = '' OR trim(linkedin_url) = '' OR trim(phone) = '')
         AND (site_checked_at = '' OR site_checked_at < $1)
         AND outreach <> 'Block List'
       ORDER BY opportunity DESC, id ASC
@@ -325,10 +329,11 @@ async function contactCoverage() {
             count(*) FILTER (WHERE trim(contact_name) <> '')::int AS with_name,
             count(*) FILTER (WHERE contact_name_source = 'site')::int AS name_verified,
             count(*) FILTER (WHERE trim(linkedin_url) <> '')::int AS with_linkedin,
+            count(*) FILTER (WHERE trim(phone) <> '')::int        AS with_phone,
             count(*) FILTER (WHERE trim(country) <> '')::int      AS with_country
        FROM leads`
   );
-  return r.rows[0] || { total: 0, with_site: 0, with_name: 0, name_verified: 0, with_linkedin: 0, with_country: 0 };
+  return r.rows[0] || { total: 0, with_site: 0, with_name: 0, name_verified: 0, with_linkedin: 0, with_phone: 0, with_country: 0 };
 }
 
 async function deleteLead(id) {
@@ -349,6 +354,18 @@ async function countSendable() {
 
 async function logEvent(leadId, type) {
   await q('INSERT INTO events (lead_id, type, day) VALUES ($1,$2,$3)', [leadId, type, todayStamp()]);
+}
+
+/**
+ * Which leads were emailed today. countToday() counts events for the quota; this
+ * answers "show me them", so the Sent-today tile can open the actual rows.
+ */
+async function leadIdsToday(types) {
+  const r = await q(
+    `SELECT DISTINCT lead_id FROM events WHERE day = $1 AND type = ANY($2) AND lead_id IS NOT NULL`,
+    [todayStamp(), types]
+  );
+  return new Set(r.rows.map((x) => x.lead_id));
 }
 
 async function countToday(types) {
@@ -378,5 +395,5 @@ module.exports = {
   countDuplicates, removeDuplicates, appendApp, duplicateGroups, mergeByEmail,
   deleteExtrasByEmail, mergeAllDuplicates, backfillBlankNames,
   leadsNeedingEnrichment, contactCoverage,
-  countSendable, logEvent, countToday, getSetting, setSetting, config
+  countSendable, logEvent, countToday, leadIdsToday, getSetting, setSetting, config
 };

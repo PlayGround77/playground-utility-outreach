@@ -144,7 +144,14 @@ const ROLE = '(?:' + ['founder', 'co-?founder', 'owner', 'ceo', 'cto', 'creator'
   'developer', 'indie developer', 'maker'].map(ci).join('|') + ')';
 // One word of a name: "Jane", "O'Brien", "Anne-Marie", "d'Angelo".
 const WORD = "[A-Z][a-z]{0,19}(?:['’-][A-Za-z][a-z]{0,19})?";
-const NAME = `${WORD}(?:\\s+${WORD}){1,2}`;
+// A word followed by a colon is the NEXT field's label, not part of this name.
+// Stripping tags turns "<p>Founder: Marta Nowak</p><p>Phone: ...</p>" into one
+// run of text, and without this the greedy {1,2} swallows "Phone" and stores
+// "Marta Nowak Phone". Rejecting it forces the engine to back off to two words.
+// The \b matters: without it the engine dodges the lookahead by matching only
+// part of the word ("Phon" leaves "e:", which is not a colon), and stores a
+// truncated label instead of dropping it.
+const NAME = `${WORD}(?:\\s+${WORD}\\b(?!\\s*:)){1,2}`;
 const NAME_PATTERNS = [
   new RegExp(`${ROLE}\\s*[:\\-–—]?\\s*(${NAME})`, 'g'),
   new RegExp(`(${NAME})\\s*[,\\-–—|]\\s*(?:${ci('the')}\\s+)?${ROLE}`, 'g'),
@@ -215,6 +222,41 @@ function findPersonName(text) {
   return '';
 }
 
+// A phone number is only ever taken from something the studio explicitly marked
+// AS a phone number: a tel: link, or a labelled line in the copy. There is
+// deliberately no bare digit-run pattern - a page is full of digit runs (VAT and
+// company numbers, dates, prices, postcodes, order IDs), and a wrong number here
+// means cold-calling a stranger. Same rule as the contact name: publish it or we
+// do not have it.
+const TEL_HREF = /href=["']tel:([^"']{5,40})["']/gi;
+const LABELLED = new RegExp(
+  '(?:' + ['phone', 'telephone', 'tel', 'mobile', 'call us', 'call'].map(ci).join('|') + ')' +
+  '\\s*[:.\\-]?\\s*(\\+?[0-9][0-9().\\-\\s]{5,24}[0-9])', 'g');
+
+/**
+ * Find a phone number the studio published. Returns { phone, source } where
+ * source is 'tel' (a tel: link - the number they wired up for a click, so the
+ * strongest signal) or 'text' (a number sitting behind a Phone:/Tel: label).
+ * The number is kept in THEIR formatting; people.normalisePhone() is what
+ * decides whether it is a number at all, and what the tel: link uses.
+ */
+function findPhone(html) {
+  const raw = String(html || '').slice(0, MAX_SCAN_CHARS);
+  TEL_HREF.lastIndex = 0;
+  let m;
+  while ((m = TEL_HREF.exec(raw)) !== null) {
+    const p = people.displayPhone(m[1]);
+    if (p) return { phone: p, source: 'tel' };
+  }
+  const text = toText(raw);
+  LABELLED.lastIndex = 0;
+  while ((m = LABELLED.exec(text)) !== null) {
+    const p = people.displayPhone(m[1]);
+    if (p) return { phone: p, source: 'text' };
+  }
+  return { phone: '', source: '' };
+}
+
 /** Prefer a personal address over a role one (jane@x.com beats info@x.com). */
 function findBetterEmail(text, domain) {
   const hits = (String(text || '').slice(0, MAX_SCAN_CHARS).match(EMAIL_RE) || [])
@@ -233,10 +275,10 @@ function findBetterEmail(text, domain) {
  * Fetch a studio site and extract what we can about the person behind it.
  * Always resolves - never throws - so callers can treat it as best-effort.
  *
- * Returns { contactName, linkedin, email, pagesRead, source: 'site' }.
+ * Returns { contactName, linkedin, email, phone, phoneSource, pagesRead, source: 'site' }.
  */
 async function enrichFromSite(website) {
-  const empty = { contactName: '', linkedin: '', email: '', pagesRead: 0, source: 'site' };
+  const empty = { contactName: '', linkedin: '', email: '', phone: '', phoneSource: '', pagesRead: 0, source: 'site' };
   let base;
   try {
     const raw = String(website || '').trim();
@@ -275,8 +317,15 @@ async function enrichFromSite(website) {
     if (!out.linkedin) out.linkedin = findLinkedIn(html);
     if (!out.contactName) out.contactName = findPersonName(text);
     if (!out.email) out.email = findBetterEmail(text, domain);
+    if (!out.phone) {
+      const ph = findPhone(html);
+      out.phone = ph.phone; out.phoneSource = ph.source;
+    }
 
-    if (out.linkedin && out.contactName) break; // nothing better to find
+    // The phone lives on the Contact page far more often than the homepage, so
+    // it does not get a vote here - stopping early to save a fetch is worth more
+    // than a number we mostly would not have found anyway.
+    if (out.linkedin && out.contactName) break;
 
     // Queue the About/Team/Contact pages this site actually links to. Only from
     // the first page we manage to read, so one link-heavy page cannot fan out.
@@ -292,5 +341,6 @@ async function enrichFromSite(website) {
 module.exports = {
   enrichFromSite,
   // exported for direct exercise without network I/O
-  toText, findLinkedIn, findPersonName, findBetterEmail, allowedByRobots, findInternalLinks, underFetchCap
+  toText, findLinkedIn, findPersonName, findBetterEmail, findPhone,
+  allowedByRobots, findInternalLinks, underFetchCap
 };

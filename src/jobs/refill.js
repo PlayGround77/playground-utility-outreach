@@ -104,6 +104,10 @@ async function runPoolRefill(force) {
                 cand.contactNameSource = 'site';
               }
               if (found.linkedin) cand.linkedin = found.linkedin;
+              if (found.phone && !cand.phone) {
+                cand.phone = found.phone;
+                cand.phoneSource = found.phoneSource;
+              }
               if (found.email && !cand.email) cand.email = found.email;
               cand.siteCheckedAt = new Date().toISOString().slice(0, 10);
             } catch (e) { /* enrichment is optional */ }
@@ -121,6 +125,7 @@ async function runPoolRefill(force) {
             hasIap: cand.hasIap, hasAds: cand.hasAds, website: cand.website,
             contactName: cand.contactName || '', contactNameSource: cand.contactNameSource || '',
             linkedin: cand.linkedin || '', country: cand.country || '',
+            phone: cand.phone || '', phoneSource: cand.phoneSource || '',
             siteCheckedAt: cand.siteCheckedAt || '',
             lastUpdate: cand.lastUpdate, opportunity: cand.opportunity,
             reviewSignals: cand.reviewSignals || 0, reviewEvidence: cand.reviewEvidence || '',

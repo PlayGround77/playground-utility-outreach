@@ -95,6 +95,25 @@ function contactCell(l) {
   return `<span title="${esc(why)}">${mark} ${esc(name)}</span>`;
 }
 
+// Only ever a number the studio published AS a phone number - a tel: link, a
+// labelled line on their site, or the store's developer contact. There is no
+// digit-scraping fallback: a page is full of digit runs (VAT and company
+// numbers, dates, postcodes), and a wrong number here means cold-calling a
+// stranger. Their own formatting is kept; only the tel: link is normalised.
+function phoneCell(l) {
+  const shown = String(l.phone || '');
+  if (!shown) {
+    return '<span class="muted" title="No phone published. Only a tel: link, a Phone:/Tel: line on their site, or the store listing counts - nothing is guessed from digits on the page.">—</span>';
+  }
+  const dial = people.normalisePhone(shown);
+  const why = {
+    tel: 'A tap-to-call link on the studio\'s own website',
+    text: 'Listed on their site behind a Phone/Tel label',
+    store: 'The developer contact on the store listing'
+  }[l.phone_source] || 'Published by the studio';
+  return `<a href="tel:${esc(dial)}" title="${esc(why)}" style="white-space:nowrap">📞 ${esc(shown)}</a>`;
+}
+
 // The LinkedIn wordmark, inline so it needs no external asset and inherits the
 // surrounding colour: brand blue when we have a real profile, muted when the
 // links below it are only searches.
@@ -195,7 +214,12 @@ function shell(inner) {
      renders on top of them. */
   form.stack{display:block}
   .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:.6rem;margin:.4rem 0 1rem}
-  .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:.7rem .9rem}
+  .tile{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:.7rem .9rem;color:inherit;text-decoration:none;transition:border-color .12s,transform .12s}
+  /* text-decoration is repeated here because the global a:hover rule below is
+     more specific than .tile, and would underline the number and the label. */
+  .tile:hover{border-color:var(--accent);transform:translateY(-1px);text-decoration:none}
+  .tile.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
   .tile .n{font-size:1.5rem;font-weight:700;line-height:1}
   .tile .l{color:var(--muted);font-size:.75rem;margin-top:.25rem;text-transform:uppercase;letter-spacing:.03em}
   details.crit{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:.6rem 1rem;margin-bottom:1rem}
@@ -393,17 +417,32 @@ function makeApp() {
     try {
       const leads = await db.allLeads();
       const S = config.statuses;
-      const st = { queue: 0, sent: 0, fu1: 0, fu2: 0, closed: 0, replied: 0, blocked: 0 };
-      for (const l of leads) {
-        if (l.grp === config.groups.blockList) st.blocked++;
-        else if (!l.outreach && l.email) st.queue++;
-        if (l.outreach === S.emailSent) st.sent++;
-        else if (l.outreach === S.fu1Sent) st.fu1++;
-        else if (l.outreach === S.fu2Sent) st.fu2++;
-        else if (l.outreach === S.sequenceClosed) st.closed++;
-        if (l.response === config.responses.respond) st.replied++;
-      }
       const sentToday = await db.countToday(['initial', 'fu1', 'fu2']);
+      const sentTodayIds = await db.leadIdsToday(['initial', 'fu1', 'fu2']);
+
+      // One predicate per tile, used for BOTH the number on the tile and the
+      // rows you get when you click it - so a tile reading 130 can never open a
+      // list of 128. Clicking sets ?view=<key>.
+      const TILES = [
+        { key: 't_today', label: 'Sent today', test: (l) => sentTodayIds.has(l.id),
+          hint: 'The leads emailed today' },
+        { key: 'queue', label: 'Queue', test: (l) => !l.outreach && l.email && l.grp !== config.groups.blockList,
+          hint: 'Sourced, has an email, not contacted yet' },
+        { key: 't_sent', label: 'Email sent', test: (l) => l.outreach === S.emailSent,
+          hint: 'First email out, no follow-up yet' },
+        { key: 't_fu1', label: 'Follow-up 1', test: (l) => l.outreach === S.fu1Sent },
+        { key: 't_fu2', label: 'Follow-up 2', test: (l) => l.outreach === S.fu2Sent },
+        { key: 'replied', label: 'Replied', test: (l) => l.response === config.responses.respond,
+          hint: 'They wrote back' },
+        { key: 't_closed', label: 'Closed', test: (l) => l.outreach === S.sequenceClosed,
+          hint: 'Sequence finished or stopped - bounced, or no answer after both follow-ups' },
+        { key: 'blocked', label: 'Blocked', test: (l) => l.grp === config.groups.blockList }
+      ];
+      // Sent-today is a count of leads; the quota line above counts sends. They
+      // differ only if one lead got two sends in a day, which the follow-up
+      // delays make impossible - but count the rows, so the tile matches its list.
+      const tileCounts = {};
+      for (const t of TILES) tileCounts[t.key] = leads.filter(t.test).length;
       const crit = await criteria.get();
       const sendMode = await db.getSetting('send_mode', 'manual');
       const msg = req.query.msg ? esc(String(req.query.msg).slice(0, 300)) : '';
@@ -435,7 +474,8 @@ function makeApp() {
       const cov = await db.contactCoverage();
       cov.needs_enrich = leads.filter((l) =>
         String(l.website || '').trim() &&
-        (!String(l.contact_name || '').trim() || !String(l.linkedin_url || '').trim()) &&
+        (!String(l.contact_name || '').trim() || !String(l.linkedin_url || '').trim() ||
+         !String(l.phone || '').trim()) &&
         !String(l.site_checked_at || '').trim()).length;
       const lastWatchRun = await db.getSetting('last_watch_run', '');
       const lastWatchStatus = await db.getSetting('last_watch_status', 'never run yet');
@@ -444,14 +484,14 @@ function makeApp() {
 
       // View filter (defaults to hiding the Block List).
       const view = req.query.view || 'nonblocked';
-      const BL = config.groups.blockList, RP = config.groups.replied;
+      const BL = config.groups.blockList;
       const R = config.responses;
       let shown = leads;
-      if (view === 'nonblocked') shown = leads.filter((l) => l.grp !== BL);
-      else if (view === 'queue') shown = leads.filter((l) => !l.outreach && l.email && l.grp !== BL && l.grp !== RP);
+      // A tile's own predicate wins, so clicking it shows exactly what it counted.
+      const tileView = TILES.filter((t) => t.key === view)[0];
+      if (tileView) shown = leads.filter(tileView.test);
+      else if (view === 'nonblocked') shown = leads.filter((l) => l.grp !== BL);
       else if (view === 'contacted') shown = leads.filter((l) => l.outreach && l.grp !== BL);
-      else if (view === 'replied') shown = leads.filter((l) => l.response === R.respond);
-      else if (view === 'blocked') shown = leads.filter((l) => l.grp === BL);
       // 'all' → no filter
 
       // Column filters — free-text search + per-column numeric ranges + platform.
@@ -521,6 +561,7 @@ function makeApp() {
         <td>${l.store_link ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">↗</a>` : ''}</td>
         <td>${l.website ? `<a href="${esc(l.website)}" target="_blank" rel="noopener" title="${esc(l.website)}">🌐</a>` : '<span class="muted" title="No website listed — often a solo-dev signal">—</span>'}</td>
         <td class="ell">${contactCell(l)}</td>
+        <td class="ell">${phoneCell(l)}</td>
         <td class="muted">${esc(l.country)}</td>
         <td>${findPersonCell(l)}</td>
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach)}</td>
@@ -562,7 +603,15 @@ function makeApp() {
         modeBtn('manual', '✋ Manual', 'No auto-send; you send per lead (✉) or with Send tick') +
         modeBtn('auto', '▶ Auto', 'Scheduler sends automatically every 15 min in the window');
 
-      const tile = (n, l) => `<div class="tile"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+      // Every tile is a link into the table. Filters and the search box are
+      // deliberately dropped: you clicked a total, so you should get that total.
+      const tile = (t) => {
+        const n = tileCounts[t.key];
+        const on = view === t.key;
+        return `<a class="tile${on ? ' on' : ''}" href="/?view=${t.key}"
+          title="${esc(t.hint || t.label)} - click to list ${n === 1 ? 'it' : 'them'}">
+          <div class="n">${n}</div><div class="l">${esc(t.label)}</div></a>`;
+      };
 
       res.send(shell(`
         <header>
@@ -576,7 +625,7 @@ function makeApp() {
             <form method="post" action="/test-email"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
             <form method="get" action="/duplicates"><button title="Review & merge duplicate leads (same email) — combine their apps into one">🔁 Duplicates</button></form>
             ${blankNameCount ? `<form method="post" action="/admin/fix-names" onsubmit="return confirm('Fix ${blankNameCount} lead(s) with a blank Studio name?')"><button class="primary" title="AppStoreSpy returned no developer name for these — fill in the app name or developer ID instead of leaving it blank">🩹 Fix ${blankNameCount} blank name${blankNameCount === 1 ? '' : 's'}</button></form>` : ''}
-            ${cov.needs_enrich ? `<form method="post" action="/admin/enrich"><input type="hidden" name="batch" value="50"><button title="Read up to 50 studio websites for a founder name and a LinkedIn link. Free - no API credits - but takes a minute.">🔎 Find people (${cov.needs_enrich})</button></form>` : ''}
+            ${cov.needs_enrich ? `<form method="post" action="/admin/enrich"><input type="hidden" name="batch" value="50"><button title="Read up to 50 studio websites for a founder name, a phone number and a LinkedIn link. Free - no API credits - but takes a minute.">🔎 Find people (${cov.needs_enrich})</button></form>` : ''}
             <form method="get" action="/audit"><button title="Find possibly-irrelevant leads (giants, junk) to review and block">🔎 Audit</button></form>
             <form method="get" action="/reviews"><button title="See the actual review quotes behind every 💬 buy-signal badge">💬 Reviews</button></form>
             <form method="post" action="/admin/clear" onsubmit="return confirm('Delete ALL leads and events? This cannot be undone.')"><button title="Delete all leads to start fresh">🗑 Clear</button></form>
@@ -621,16 +670,11 @@ function makeApp() {
           <span id="replytick" data-last="${esc(lastWatchRun)}" title="${esc(lastWatchStatus)}">…</span>
         </div>
 
-        <div class="tiles">
-          ${tile(sentToday, 'Sent today')}
-          ${tile(st.queue, 'Queue')}
-          ${tile(st.sent, 'Email sent')}
-          ${tile(st.fu1, 'Follow-up 1')}
-          ${tile(st.fu2, 'Follow-up 2')}
-          ${tile(st.replied, 'Replied')}
-          ${tile(st.closed, 'Closed')}
-          ${tile(st.blocked, 'Blocked')}
-        </div>
+        <div class="tiles">${TILES.map(tile).join('')}</div>
+        ${tileView ? `<div class="banner" style="margin:-.6rem 0 1rem;padding:.45rem .7rem;font-size:.85rem">
+          Showing <b>${tileCounts[view]}</b> ${esc(tileView.label.toLowerCase())} lead${tileCounts[view] === 1 ? '' : 's'}.
+          <a href="/" style="margin-left:.5rem;font-weight:600">← Back to all</a>
+        </div>` : ''}
 
         <details class="crit"${aiKey.set ? '' : ' open'}>
           <summary>🔑 API keys — ${aiKey.set
@@ -767,11 +811,13 @@ function makeApp() {
             <b>💬 badge:</b> number of reviews found complaining about price/ads or offering to pay — open <b>👁 Preview</b> on that lead to read the actual quotes.<br>
             <b>Site:</b> 🌐 is the studio's own website. It comes from Google Play when listed; otherwise it is inferred from the privacy-policy link or the email domain. A dash means we found nothing, which is itself a solo-dev signal (the score only counts a website Google Play actually listed).<br>
             <b>Contact:</b> the person behind the app. <b>✅</b> means the name was read off the studio's own website and is reliable. <b>~</b> means it was split out of the email address (jane.doe@… → Jane Doe) and is a <i>guess</i> — never address someone by a ~ name without checking. Outreach emails deliberately keep using the studio name.<br>
+            <b>Phone:</b> a number the studio published <i>as</i> a phone number — a tap-to-call link or a "Phone:"/"Tel:" line on their own site, or the store listing's developer contact. Tap it to call. There is deliberately no digit-scraping fallback: a page is full of digit runs (company and VAT numbers, dates, postcodes), and a wrong number here means calling a stranger. A dash means they published none.<br>
             <b>Country:</b> where the studio is based, from AppStoreSpy. Its job is to narrow down a common name on LinkedIn.<br>
+            <b>The tiles at the top are clickable</b> — each one filters the table to exactly the leads it counted, and "← Back to all" clears it.<br>
             <b>Contact coverage right now:</b> ${cov.total} lead${cov.total === 1 ? '' : 's'} —
             ${cov.with_site} with a website, ${cov.with_name} with a contact name
             (${cov.name_verified} of those verified from the studio site),
-            ${cov.with_linkedin} with a LinkedIn URL, ${cov.with_country} with a country.
+            ${cov.with_linkedin} with a LinkedIn URL, ${cov.with_phone} with a phone, ${cov.with_country} with a country.
             Check these numbers before paying for external enrichment: if the free steps already cover most leads, there is nothing to buy.<br>
             <b>LinkedIn:</b> a <span style="color:#0A66C2;font-weight:600">blue</span> icon is a real link — a profile or company page the studio published on its own website, found while reading their site. A <span class="muted" style="font-weight:600">grey</span> icon means nothing was found there, and opens ready-made <i>searches</i> for this lead — by name + studio, by name + country, by app name (developers often list their own app in their profile), and by studio + role. Those are searches, not verified profiles: you pick the right person.<br>
             <b>View:</b> quick presets (e.g. "Queue" = never contacted yet). <b>Search:</b> matches Studio/App/Category/Email. <b>OS:</b> Android vs iOS (only Android is sourced today).<br>
@@ -788,6 +834,7 @@ function makeApp() {
             <th title="Installs/day × total apps for this developer. A raw 'how big' number, NOT a quality signal — Google/Samsung score in the billions here. Used only to break ties after Opportunity; filter it out with 'Priority max'.">Priority</th>
             <th>Email</th><th>Store</th><th title="The studio's own website, when Google Play lists one. Blank is itself a signal — solo devs often have none.">Site</th>
             <th title="The person behind the app. ✅ was read off the studio's own site; ~ was guessed from the email address and is unverified.">Contact</th>
+            <th title="A phone number the studio published itself - a tap-to-call link or a Phone: line on their site, or the store's developer contact. Tap it to call. Nothing is guessed from digits on a page.">Phone</th>
             <th title="Where the studio is based (AppStoreSpy hq_country). Narrows down a common name on LinkedIn.">Country</th>
             <th title="A blue LinkedIn icon is a profile the studio published on its own website — a real link. A grey one opens ready-made searches instead, because nothing was found: those are searches, not verified profiles.">LinkedIn</th>
             <th>Outreach status</th><th>Response status</th><th title="What the lead actually wrote back (hover for more, or open the thread in Gmail)">Reply</th><th>Group</th><th></th>
@@ -921,6 +968,10 @@ function makeApp() {
                   ? '<span style="color:#059669">✅ read from their website</span>'
                   : '<span style="color:#b45309">~ guessed from the email address, unverified</span>'}`
               : '<span class="muted">not found</span>'}</div>
+            <div><b>Phone:</b> ${lead.phone
+              ? `<a href="tel:${esc(people.normalisePhone(lead.phone))}">${esc(lead.phone)}</a>
+                 <span class="muted" style="font-size:.8rem">- ${lead.phone_source === 'store' ? 'the store listing\'s developer contact' : 'published on their own website'}</span>`
+              : '<span class="muted">none published</span>'}</div>
             <div><b>Website:</b> ${lead.website ? `<a href="${esc(lead.website)}" target="_blank" rel="noopener">${esc(lead.website)}</a>` : '<span class="muted">none</span>'}</div>
             <div><b>LinkedIn:</b> ${lead.linkedin_url
               ? `<a class="li li-on" href="${esc(lead.linkedin_url)}" target="_blank" rel="noopener" style="gap:.3rem">${liIcon(15)} ${esc(lead.linkedin_url.replace(/^https?:\/\/(www\.)?/, ''))}</a>
@@ -1452,7 +1503,7 @@ function makeApp() {
     if (!rows.length) return back(res, 'Nothing to enrich - every lead with a website already has a contact name and LinkedIn.');
 
     (async () => {
-      let named = 0, linked = 0;
+      let named = 0, linked = 0, phoned = 0;
       for (const row of rows) {
         try {
           const found = await enrich.enrichFromSite(row.website);
@@ -1465,13 +1516,18 @@ function makeApp() {
             named++;
           }
           if (found.linkedin && !row.linkedin_url) { fields.linkedin_url = found.linkedin; linked++; }
+          if (found.phone && !row.phone) {
+            fields.phone = found.phone;
+            fields.phone_source = found.phoneSource;
+            phoned++;
+          }
           await db.updateLead(row.id, fields);
         } catch (e) { /* one bad site must not stop the batch */ }
       }
-      console.log(`[enrich] backfill done: ${rows.length} sites read, ${named} names, ${linked} LinkedIn URLs`);
+      console.log(`[enrich] backfill done: ${rows.length} sites read, ${named} names, ${linked} LinkedIn URLs, ${phoned} phones`);
     })().catch((e) => console.error('[enrich] backfill crashed', e));
 
-    return back(res, `🔎 Reading ${rows.length} studio website${rows.length === 1 ? '' : 's'} in the background. Refresh in a minute to see names and LinkedIn links appear.`);
+    return back(res, `🔎 Reading ${rows.length} studio website${rows.length === 1 ? '' : 's'} in the background. Refresh in a minute to see names, phones and LinkedIn links appear.`);
   });
 
   // Paid LinkedIn lookup for one shortlisted lead (Apify + Google index).

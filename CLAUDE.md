@@ -125,6 +125,19 @@ nothing to do with.
   page budget counts *attempts* rather than successes so a one-page site cannot burn it on 404s.
 - **`findLinkedIn` prefers a `/in/` profile over a `/company/` page**, and trims subpaths — a footer
   link to `linkedin.com/company/tiimo-aps/about/` is stored as the profile URL itself.
+- **A phone is only ever taken from something published *as* a phone number**: a `tel:` link
+  (`phone_source='tel'`), a `Phone:`/`Tel:`/`Mobile:` label in the copy (`'text'`), or the store's
+  developer contact (`'store'`). There is deliberately **no bare digit-run fallback** — a page is
+  full of digit runs (VAT and company numbers, dates, prices, postcodes, order IDs) and a wrong
+  number means cold-calling a stranger, the same reasoning that keeps guessed names out of outreach.
+  `people.normalisePhone()` is the single validator (7–15 digits, `00`→`+`, placeholders rejected);
+  `displayPhone()` keeps **their** formatting, because we do not know where the country code ends
+  and any regrouping we invented would read worse than the spacing they chose. Only the `tel:` href
+  is normalised.
+- **A name must not run into the next field's label.** Stripping tags turns
+  `<p>Founder: Marta Nowak</p><p>Phone: …</p>` into one run of text, so `NAME` rejects a trailing
+  word followed by a colon — with a `\b` before the lookahead, or the engine dodges it by matching
+  `Phon` and leaving `e:`.
 - **Regexes in `enrich.js` must not carry the `/i` flag.** Capitalisation is the only thing
   separating a name from surrounding prose; `/i` makes `[A-Z]` match lowercase, which swallows the
   next word *and* backtracks catastrophically on a big page. Role keywords spell out their own case
@@ -259,6 +272,21 @@ answered. Replying from Gmail directly is the obvious way that happens, so there
   reply scan.
 - **Opening `/reply/:id` self-heals** from the fetched thread when its last message is `fromUs`.
   The thread is the authority on who spoke last; our own stamp is only a cache of it.
+
+### The stat tiles are the filter
+
+Each tile at the top links to `/?view=<key>`. The count on a tile and the rows you get when you
+click it come from **one predicate**, in the `TILES` list in `src/server.js` — so a tile reading 130
+can never open a list of 128. That was a live bug before: the Queue tile and the `view=queue` filter
+disagreed about a lead in the Replied group. Adding a tile means adding one entry, not editing a
+counting loop and a filter branch that must be kept in sync.
+
+- `Sent today` counts **leads** (`db.leadIdsToday`), not send events like the quota line above it.
+  A lead cannot be sent to twice in one day, so they agree — but the tile has to match its own list.
+- Clicking a tile drops the search box and column filters on purpose: you clicked a total, so you
+  should get that total.
+- `.tile:hover` repeats `text-decoration:none` because the global `a:hover` rule is more specific
+  than `.tile` and would underline the number and the label.
 
 ### The LinkedIn column
 

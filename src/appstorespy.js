@@ -71,7 +71,11 @@ async function queryApps(category, page, limit, crit) {
     'rating_avg', 'rating_count', 'iap', 'ads', 'advertised', 'update_date',
     'developer_name', 'developer_id', 'url_appstorespy',
     'website',          // studio's own site — also the "solo dev" signal in the score
-    'privacy_policy'];  // fallback source for the studio domain when website is blank
+    'privacy_policy',   // fallback source for the studio domain when website is blank
+    // Speculative: Play shows a developer phone under "Developer contact", but
+    // AppStoreSpy does not document one. If the field does not exist the guard
+    // below drops it once, caches that, and we fall back to the studio's site.
+    'phone'];
 
   async function attempt(fields) {
     const body = {
@@ -173,6 +177,7 @@ function mapAppRow(row) {
     hasAds: !!(row.ads || row.advertised),
     website: String(row.website || ''),
     privacyPolicy: String(row.privacy_policy || ''),
+    phone: String(row.phone || ''),
     lastUpdate: String(row.update_date || ''),
     storeLink: bundle
       ? 'https://play.google.com/store/apps/details?id=' + bundle
@@ -243,6 +248,7 @@ function buildCandidate(appRow, dev) {
   const listedSite = String(appRow.website || dev.website || '');
   const website = listedSite || hostAsSite(appRow.privacyPolicy) || siteFromEmail(email);
   const person = people.nameFromEmail(email);
+  const storePhone = people.displayPhone(appRow.phone || dev.phone || '');
   // AppStoreSpy sometimes returns no developer name at all — never leave the
   // Studio column blank; fall back to the app name, then the developer ID.
   const devName = appRow.devName || String(dev.name || '') ||
@@ -266,6 +272,10 @@ function buildCandidate(appRow, dev) {
     website: website,
     contactName: person.name,
     contactNameSource: person.name ? 'email' : '',
+    // Validated through the same check the site crawl uses, so a junk value from
+    // either source is dropped rather than rendered as a callable link.
+    phone: storePhone,
+    phoneSource: storePhone ? 'store' : '',
     contactNameConfidence: person.confidence || '',
     linkedin: '',
     // PlayDev.hq_country — free, the developer call is already made, and it is
