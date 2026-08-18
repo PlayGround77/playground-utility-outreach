@@ -163,11 +163,11 @@ function findPersonCell(l) {
 
 /* ---- status option lists + colors ---- */
 const OUTREACH_OPTS = ['', 'Email Sent', 'Follow-up 1 Sent', 'Follow-up 2 Sent', 'Sequence Closed'];
-const RESPONSE_OPTS = ['', 'Respond', 'Booked a call', 'Not Relevant', 'No Response'];
+const RESPONSE_OPTS = ['', 'Respond', 'Booked a call', 'Reviewing Data', 'Not Relevant', 'No Response'];
 const STATUS_COLOR = {
   'Email Sent': '#3b82f6', 'Follow-up 1 Sent': '#f59e0b', 'Follow-up 2 Sent': '#f97316',
   'Sequence Closed': '#6b7280', 'Respond': '#10b981', 'Booked a call': '#059669',
-  'Not Relevant': '#ef4444', 'No Response': '#6b7280'
+  'Reviewing Data': '#7c3aed', 'Not Relevant': '#ef4444', 'No Response': '#6b7280'
 };
 function optionList(opts, current) {
   return opts.map((o) =>
@@ -178,7 +178,7 @@ function selectCell(id, name, opts, current, backHere) {
   const style = c ? ` style="border-left:4px solid ${c}"` : '';
   const title = name === 'outreach'
     ? 'Outreach status — where this lead is in the sequence. Set automatically as emails go out; change here to override.'
-    : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call” / “Not Relevant” yourself.';
+    : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call”, “Reviewing Data” (once they have given us access and we are going through their numbers), “Not Relevant” or “No Response” yourself.';
   return `<form method="post" action="/action/${id}/set" class="sel">
     <input type="hidden" name="back" value="${esc(backHere)}">
     <select name="${name}" title="${esc(title)}" onchange="this.form.submit()"${style}>${optionList(opts, current)}</select>
@@ -838,6 +838,9 @@ function makeApp() {
             <b>Contact:</b> the person behind the app. <b>✅</b> means the name was read off the studio's own website and is reliable. <b>~</b> means it was split out of the email address (jane.doe@… → Jane Doe) and is a <i>guess</i> — never address someone by a ~ name without checking. Outreach emails deliberately keep using the studio name.<br>
             <b>Phone:</b> a number the studio published <i>as</i> a phone number — a tap-to-call link or a "Phone:"/"Tel:" line on their own site, or the store listing's developer contact. Tap it to call. There is deliberately no digit-scraping fallback: a page is full of digit runs (company and VAT numbers, dates, postcodes), and a wrong number here means calling a stranger. A dash means they published none.<br>
             <b>Country:</b> where the studio is based, from AppStoreSpy. Its job is to narrow down a common name on LinkedIn.<br>
+            <b>Response status:</b> "Respond" is set automatically on their first reply. Everything after that is set by
+            hand as the conversation moves: <b>Booked a call</b>, <b>Reviewing Data</b> (they gave us access and we are going
+            through their numbers), <b>Not Relevant</b>, or <b>No Response</b> (closed out after both follow-ups with silence).<br>
             <b>The tiles at the top are clickable</b> — each one filters the table to exactly the leads it counted, and "← Back to all" clears it.<br>
             <b>Contact coverage right now:</b> ${cov.total} lead${cov.total === 1 ? '' : 's'} —
             ${cov.with_site} with a website, ${cov.with_name} with a contact name

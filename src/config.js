@@ -109,7 +109,7 @@ const config = {
     fu2Sent: 'Follow-up 2 Sent', sequenceClosed: 'Sequence Closed'
   },
   responses: {
-    respond: 'Respond', bookedCall: 'Booked a call',
+    respond: 'Respond', bookedCall: 'Booked a call', reviewingData: 'Reviewing Data',
     notRelevant: 'Not Relevant', noResponse: 'No Response'
   },
 
