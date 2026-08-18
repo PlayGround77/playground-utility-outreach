@@ -450,6 +450,8 @@ function makeApp() {
         { key: 't_fu2', label: 'Follow-up 2', test: (l) => l.outreach === S.fu2Sent },
         { key: 'replied', label: 'Replied', test: (l) => l.response === config.responses.respond,
           hint: 'They wrote back' },
+        { key: 'reviewing', label: 'Reviewing Data', test: (l) => l.response === config.responses.reviewingData,
+          hint: 'They gave us access and we are going through their numbers' },
         { key: 't_closed', label: 'Closed', test: (l) => l.outreach === S.sequenceClosed,
           hint: 'Sequence finished or stopped - bounced, or no answer after both follow-ups' },
         { key: 'blocked', label: 'Blocked', test: (l) => l.grp === config.groups.blockList }
