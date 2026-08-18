@@ -665,7 +665,9 @@ function makeApp() {
           <span style="opacity:.8">Newest first. ${awaitingCount ? `<b>${awaitingCount}</b> wrote again after your answer.` : ''}</span>
           ${waiting.slice(0, 6).map((l) => `
             <div style="margin-top:.5rem;padding:.5rem .7rem;background:#ffffff88;border-radius:8px">
-              <b>${esc(l.name)}</b>${l.reply_subject ? ` <span style="opacity:.7">— ${esc(l.reply_subject)}</span>` : ''}
+              <b>${l.website ? `<a href="${esc(l.website)}" target="_blank" rel="noopener" title="Open the studio's own website">${esc(l.name)}</a>` : esc(l.name)}</b>
+              ${l.top_app ? ` · ${appCell(l)}` : ''}
+              ${l.reply_subject ? ` <span style="opacity:.7">— ${esc(l.reply_subject)}</span>` : ''}
               ${l.awaitingUs ? '<span class="pill" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5;margin-left:.4rem;font-size:.68rem">↩ replied after you</span>' : ''}
               ${Number(l.reply_count) > 1 ? `<span class="muted" style="font-size:.72rem;margin-left:.4rem">${l.reply_count} messages</span>` : ''}
               <span class="muted" style="font-size:.72rem;margin-left:.4rem">${esc(agoLabel(l.last_inbound_at))}</span>
