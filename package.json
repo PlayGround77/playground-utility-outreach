@@ -8,7 +8,8 @@
     "start": "node src/index.js",
     "sourcing:once": "node src/jobs/refill.js --once",
     "send:once": "node src/jobs/sender.js --once",
-    "test:appstorespy": "node scripts/test-appstorespy.js"
+    "test:appstorespy": "node scripts/test-appstorespy.js",
+    "discover:ownership-signal": "node scripts/discover-ownership-signal.js"
   },
   "engines": {
     "node": ">=18"
