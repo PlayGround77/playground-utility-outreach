@@ -248,6 +248,26 @@ function shell(inner) {
   .grid input{width:100%;margin-top:.2rem}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
   .wrap{overflow-x:auto}
+  /* Card list for narrow screens - built from the same lead data and cell
+     helpers as the table, just stacked instead of columned. Hidden by default;
+     the media query below swaps it in for the table under ~760px, where the
+     table needs sideways scrolling past the pinned columns to read anything. */
+  .cards{display:none}
+  .lcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+         padding:.7rem .8rem;margin-bottom:.6rem;font-size:.85rem}
+  .lcard.needsreply{border-left:4px solid #f43f5e}
+  .lcard-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
+  .lcard-name{display:flex;align-items:center;gap:.4rem;min-width:0}
+  .lcard .ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .lcard-row form.sel{flex:1;min-width:0}
+  .lcard select{font-size:.82rem;width:100%}
+  .lcard-reply{margin-top:.4rem;padding:.4rem .5rem;background:var(--bg);border-radius:8px;font-size:.82rem}
+  .lcard-actions{flex-wrap:wrap;gap:.4rem;margin-top:.5rem}
+  @media (max-width: 760px) {
+    .wide-only{display:none}
+    .card.wrap{display:none}
+    .cards{display:block}
+  }
   table{border-collapse:collapse;width:100%;font-size:.85rem}
   th,td{padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
   th{position:sticky;top:0;background:var(--panel);font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);z-index:1}
@@ -571,6 +591,21 @@ function makeApp() {
       const backHere = req.url;
       const backQS = '?back=' + encodeURIComponent(backHere);
 
+      // Shared between the desktop table and the mobile card list, so the two
+      // views can never show different reply/action state for the same lead -
+      // only the markup wrapping this changes with the layout.
+      const replyCell = (l) => l.reply_snippet
+        ? `${l.needsReply
+            ? `<a href="/reply/${l.id}${backQS}" class="unanswered" title="They wrote${l.awaitingUs ? ' again, after your last reply' : ''} and you have not answered yet${l.last_inbound_at ? ' — ' + esc(agoLabel(l.last_inbound_at)) : ''}"
+                >↩ NEEDS REPLY</a> `
+            : ''}<a href="/reply/${l.id}${backQS}" title="Read it and draft an answer that matches what they said">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
+        : '';
+      const actionsCell = (l) => `
+          <form method="get" action="/preview/${l.id}"><input type="hidden" name="back" value="${esc(backHere)}"><button title="See the exact email that will be sent to this lead">👁 Preview</button></form>
+          <form method="post" action="/action/${l.id}/send" onsubmit="return confirm('Send the next email in the sequence to this lead now?')"><input type="hidden" name="back" value="${esc(backHere)}"><button class="send" title="Send the next email (initial → FU1 → FU2) to THIS lead now. Respects DRY_RUN.">✉ Send</button></form>
+          <form method="post" action="/action/${l.id}/block"><input type="hidden" name="back" value="${esc(backHere)}"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form>
+          <form method="post" action="/action/${l.id}/delete" onsubmit="return confirm('Delete this lead permanently? (Block is better for junk — it also prevents re-sourcing.)')"><input type="hidden" name="back" value="${esc(backHere)}"><button title="Delete this lead permanently from the database">🗑</button></form>`;
+
       const rows = shown.slice(0, 500).map((l) => `<tr${l.needsReply ? ' class="needsreply"' : ''}>
         <td title="${esc(l.name)}"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></td>
         <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}${appBadge(l)}</td>
@@ -593,20 +628,42 @@ function makeApp() {
         <td>${findPersonCell(l)}</td>
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach, backHere)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response, backHere)}</td>
-        <td class="ell" title="${esc(l.reply_snippet)}">${l.reply_snippet
-          ? `${l.needsReply
-              ? `<a href="/reply/${l.id}${backQS}" class="unanswered" title="They wrote${l.awaitingUs ? ' again, after your last reply' : ''} and you have not answered yet${l.last_inbound_at ? ' — ' + esc(agoLabel(l.last_inbound_at)) : ''}"
-                  >↩ NEEDS REPLY</a> `
-              : ''}<a href="/reply/${l.id}${backQS}" title="Read it and draft an answer that matches what they said">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
-          : ''}</td>
+        <td class="ell" title="${esc(l.reply_snippet)}">${replyCell(l)}</td>
         <td class="muted">${esc(l.grp)}</td>
-        <td style="white-space:nowrap">
-          <form method="get" action="/preview/${l.id}"><input type="hidden" name="back" value="${esc(backHere)}"><button title="See the exact email that will be sent to this lead">👁 Preview</button></form>
-          <form method="post" action="/action/${l.id}/send" onsubmit="return confirm('Send the next email in the sequence to this lead now?')"><input type="hidden" name="back" value="${esc(backHere)}"><button class="send" title="Send the next email (initial → FU1 → FU2) to THIS lead now. Respects DRY_RUN.">✉ Send</button></form>
-          <form method="post" action="/action/${l.id}/block"><input type="hidden" name="back" value="${esc(backHere)}"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form>
-          <form method="post" action="/action/${l.id}/delete" onsubmit="return confirm('Delete this lead permanently? (Block is better for junk — it also prevents re-sourcing.)')"><input type="hidden" name="back" value="${esc(backHere)}"><button title="Delete this lead permanently from the database">🗑</button></form>
-        </td>
+        <td style="white-space:nowrap">${actionsCell(l)}</td>
       </tr>`).join('');
+
+      // A card list for narrow screens - the table needs sideways scrolling to
+      // read past the pinned Studio/Actions columns, which is exactly what is
+      // hard to do on a phone. Same lead objects, same cell helpers as the
+      // table above, just stacked instead of columned - so the two views can
+      // never disagree about a lead, only look different.
+      const cards = shown.slice(0, 500).map((l) => `
+        <div class="lcard${l.needsReply ? ' needsreply' : ''}">
+          <div class="lcard-row">
+            <label class="lcard-name"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></label>
+            <b style="color:${l.opportunity >= 70 ? '#059669' : l.opportunity >= 45 ? '#b45309' : 'inherit'}">${num(l.opportunity)}</b>
+          </div>
+          <div class="lcard-row muted">
+            <span class="ell">${appCell(l)}${appBadge(l)}</span>
+            <span>${l.platform === 'ios' ? '🍎' : '🤖'}</span>
+          </div>
+          ${l.category ? `<div class="muted" style="font-size:.78rem">${esc(l.category)} · ${num(l.installs_day)}/day · $${num(l.revenue_month)}/mo${Number(l.rating_avg) ? ' · ★' + Number(l.rating_avg).toFixed(1) : ''}</div>` : ''}
+          <div class="lcard-row" style="margin-top:.35rem;flex-wrap:wrap;gap:.5rem">
+            ${l.email ? `<a href="mailto:${esc(l.email)}" title="${esc(l.email)}">✉️</a>` : ''}
+            ${l.store_link ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener" title="Open in the store">↗</a>` : ''}
+            ${l.website ? `<a href="${esc(l.website)}" target="_blank" rel="noopener" title="${esc(l.website)}">🌐</a>` : ''}
+            <span class="ell">${contactCell(l)}</span>
+            <span>${phoneCell(l)}</span>
+            <span>${findPersonCell(l)}</span>
+          </div>
+          <div class="lcard-row" style="margin-top:.35rem;gap:.4rem">
+            ${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach, backHere)}
+            ${selectCell(l.id, 'response', RESPONSE_OPTS, l.response, backHere)}
+          </div>
+          ${l.reply_snippet ? `<div class="lcard-reply" title="${esc(l.reply_snippet)}">${replyCell(l)}</div>` : ''}
+          <div class="lcard-row lcard-actions">${actionsCell(l)}</div>
+        </div>`).join('');
 
       const mode = dry
         ? '<span class="pill dry">DRY RUN · nothing is sent</span>'
@@ -665,7 +722,14 @@ function makeApp() {
           🎉 <b>${waiting.length} conversation${waiting.length === 1 ? '' : 's'} waiting on you.</b>
           <a href="/?view=replied" style="margin-left:.5rem;font-weight:600">Show them →</a>
           <span style="opacity:.8">Newest first. ${awaitingCount ? `<b>${awaitingCount}</b> wrote again after your answer.` : ''}</span>
-          ${waiting.slice(0, 6).map((l) => `
+          ${waiting.slice(0, 6).map((l) => {
+            // Timestamps decide whether a lead is IN this list - that stays
+            // purely mechanical (their message is newest, unanswered), never
+            // gated on the AI. What the AI can do is say whether it is worth
+            // interrupting you for: a lead already on a booked call or mid
+            // diligence often writes something that needs no reply at all.
+            const noActionNeeded = l.ai_action_needed === 'no';
+            return `
             <div style="margin-top:.5rem;padding:.5rem .7rem;background:#ffffff88;border-radius:8px">
               <b>${l.website ? `<a href="${esc(l.website)}" target="_blank" rel="noopener" title="Open the studio's own website">${esc(l.name)}</a>` : esc(l.name)}</b>
               ${l.top_app ? ` · ${appCell(l)}` : ''}
@@ -673,10 +737,15 @@ function makeApp() {
               ${l.awaitingUs ? '<span class="pill" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5;margin-left:.4rem;font-size:.68rem">↩ replied after you</span>' : ''}
               ${Number(l.reply_count) > 1 ? `<span class="muted" style="font-size:.72rem;margin-left:.4rem">${l.reply_count} messages</span>` : ''}
               <span class="muted" style="font-size:.72rem;margin-left:.4rem">${esc(agoLabel(l.last_inbound_at))}</span>
-              <a href="/reply/${l.id}${backQS}" style="margin-left:.4rem;font-weight:600">✍️ Draft a reply →</a>
+              ${noActionNeeded
+                ? `<span class="pill" style="background:#f1f5f9;color:#475569;border-color:#cbd5e1;margin-left:.4rem;font-size:.68rem" title="${esc(l.ai_action_reason)}">✓ probably no reply needed</span>
+                   <a href="/reply/${l.id}${backQS}" style="margin-left:.4rem">Draft a reply anyway →</a>`
+                : `<a href="/reply/${l.id}${backQS}" style="margin-left:.4rem;font-weight:600">✍️ Draft a reply →</a>`}
               ${l.reply_thread ? `<a href="https://mail.google.com/mail/u/0/#inbox/${esc(l.reply_thread)}" target="_blank" rel="noopener" style="margin-left:.4rem">open in Gmail →</a>` : ''}
+              ${l.ai_summary ? `<div class="muted" style="font-size:.78rem;margin-top:.3rem">🧠 ${esc(l.ai_summary)}${noActionNeeded && l.ai_action_reason ? ' <i>— ' + esc(l.ai_action_reason) + '</i>' : ''}</div>` : ''}
               <div style="opacity:.85;font-style:italic;margin-top:.2rem">“${esc(l.reply_snippet)}”</div>
-            </div>`).join('')}
+            </div>`;
+          }).join('')}
         </div>` : ''}
 
         ${!gmailConnected ? `<div class="banner">📧 <b>Gmail is not connected</b> — no email can be sent until you connect it.
@@ -856,7 +925,8 @@ function makeApp() {
             <b>More column filters:</b> set any combination of numeric ranges/statuses above and click Apply — they combine with View and Search.
           </div>
         </details>
-        <p class="legend">The <b>Studio</b> and <b>Actions</b> columns stay pinned; scroll the table sideways for status &amp; details.</p>
+        <p class="legend wide-only">The <b>Studio</b> and <b>Actions</b> columns stay pinned; scroll the table sideways for status &amp; details.</p>
+        <div class="cards">${cards || '<p class="muted">No leads yet — click "Source now".</p>'}</div>
         <div class="card wrap"><table>
           <thead><tr>
             <th>Studio</th><th>App</th><th title="🤖 Android or 🍎 iOS">OS</th><th title="Acquisition Opportunity Score (0–100): demand × weak monetization × how cheap/easy to acquire. Sorted high to low.">Opp</th><th>Category</th>

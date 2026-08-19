@@ -65,6 +65,13 @@ async function init() {
       last_inbound_at  TEXT NOT NULL DEFAULT '',
       last_outbound_at TEXT NOT NULL DEFAULT '',
       reply_count      INTEGER NOT NULL DEFAULT 0,
+      -- Written once per genuinely new inbound message (replywatcher.js), not
+      -- on every page load: a short read of the thread, and a judgement on
+      -- whether it actually still needs an answer (a lead mid-diligence or
+      -- with a call booked often writes something that needs no reply at all).
+      ai_summary       TEXT NOT NULL DEFAULT '',
+      ai_action_needed TEXT NOT NULL DEFAULT '',
+      ai_action_reason TEXT NOT NULL DEFAULT '',
       grp           TEXT NOT NULL DEFAULT '',
       developer_id  TEXT NOT NULL DEFAULT '',
       message_id    TEXT NOT NULL DEFAULT '',
@@ -82,6 +89,9 @@ async function init() {
     'apps_count INTEGER NOT NULL DEFAULT 0',
     "thread_id TEXT NOT NULL DEFAULT ''",
     "apps_json TEXT NOT NULL DEFAULT ''",
+    "ai_summary TEXT NOT NULL DEFAULT ''",
+    "ai_action_needed TEXT NOT NULL DEFAULT ''",
+    "ai_action_reason TEXT NOT NULL DEFAULT ''",
     'rating_avg NUMERIC NOT NULL DEFAULT 0',
     'rating_count BIGINT NOT NULL DEFAULT 0',
     'installs_total BIGINT NOT NULL DEFAULT 0',

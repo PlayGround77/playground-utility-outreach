@@ -4,6 +4,7 @@ const config = require('../config');
 const db = require('../db');
 const email = require('../email');
 const liveMode = require('../livemode');
+const ai = require('../ai');
 
 function log(m) { console.log('[watcher] ' + m); }
 
@@ -71,6 +72,25 @@ async function runReplyWatcher() {
         if (isFirst) patch.response = R.respond;
         await db.updateLead(lead.id, patch);
         await db.logEvent(lead.id, 'reply');
+
+        // Best-effort read of the thread + "does this actually need a reply"
+        // judgement, computed once here rather than on every dashboard load -
+        // a lead mid-diligence or with a call booked often writes something
+        // that needs no answer, and the banner should not nag about those.
+        // Losing this must never lose the reply itself, so it never blocks or
+        // fails the scan.
+        try {
+          if (await ai.isEnabled()) {
+            const thread = await email.fetchThread(patch.reply_thread || tid).catch(() => []);
+            const merged = Object.assign({}, lead, patch);
+            const t = await ai.triageReply({ lead: merged, thread, replySnippet: patch.reply_snippet });
+            if (t.ok) {
+              await db.updateLead(lead.id, {
+                ai_summary: t.summary, ai_action_needed: t.actionNeeded ? 'yes' : 'no', ai_action_reason: t.reason
+              });
+            }
+          }
+        } catch (e) { log('AI triage failed (non-fatal) for ' + lead.name + ': ' + e.message); }
 
         // Alert on anything we have not shown before, including a follow-up
         // that landed after we answered.

@@ -181,7 +181,8 @@ function leadContext(lead) {
       : (l.contact_name
         ? `A name was GUESSED from their email address (${l.contact_name}) but is NOT verified - do NOT address them by it. Greet the studio instead.`
         : 'No contact name known - greet the studio, e.g. "Hi <studio> team,".'),
-    l.outreach ? `Where the sequence stands: ${l.outreach}` : ''
+    l.outreach ? `Where the sequence stands: ${l.outreach}` : '',
+    l.response ? `Where the conversation stands (operator-set): ${l.response}` : ''
   ];
   return lines.filter(Boolean).join('\n');
 }
@@ -287,6 +288,82 @@ async function draftReply({ lead, thread, replySnippet, instruction }) {
       subject: String(out.subject || '').slice(0, 200),
       body: sanitize(String(out.body)),
       usage: res.usage || null
+    };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+/* ---------------------------------------------------------------- triage */
+
+const TRIAGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: {
+      type: 'string',
+      description: 'One or two sentences: what has happened in this conversation so far. For the operator glancing at a list of leads, not a reply - do not address the lead.'
+    },
+    actionNeeded: {
+      type: 'boolean',
+      description: 'True if their latest message genuinely needs a reply from us now. False when it is just an acknowledgement, confirms something already agreed, or the conversation has moved past outreach (e.g. a call is already booked, or we are already reviewing their numbers) and nothing they said actually needs an answer.'
+    },
+    reason: {
+      type: 'string',
+      description: 'One short sentence for the operator: why a reply is, or is not, needed right now.'
+    }
+  },
+  required: ['summary', 'actionNeeded', 'reason'],
+  additionalProperties: false
+};
+
+/**
+ * A short read of the conversation plus a judgement on whether it genuinely
+ * still needs a reply - a lead with a call already booked, or one we are
+ * already running diligence on, often writes something that needs no answer
+ * (a scheduling confirmation, "looking forward to it"), and the "needs reply"
+ * banner should not nag about those. This is triage for the operator, not a
+ * reply - it never addresses the lead and never invents facts.
+ *
+ * Meant to be called once per genuinely NEW inbound message (replywatcher.js),
+ * not on every dashboard load - `effort: 'low'` keeps it cheap regardless.
+ * Returns { ok, summary, actionNeeded, reason, error }. Never throws.
+ */
+async function triageReply({ lead, thread, replySnippet }) {
+  const key = await apiKey();
+  if (!key) return { ok: false, error: 'no ANTHROPIC_API_KEY set' };
+  if (!(await underCap())) return { ok: false, error: 'daily AI call cap reached' };
+
+  const userContent =
+    `Here is the lead:\n\n${leadContext(lead)}\n\n` +
+    `Here is the email conversation so far, oldest message first:\n\n${threadBlock(thread, replySnippet)}\n\n` +
+    `Summarise what has happened, and judge whether their latest message genuinely needs a reply ` +
+    `given where the conversation stands - do not default to "yes" just because they wrote.`;
+
+  try {
+    await countCall();
+    const client = new Anthropic({ apiKey: key, timeout: TIMEOUT_MS, maxRetries: MAX_RETRIES });
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 600,
+      output_config: { effort: 'low', format: { type: 'json_schema', schema: TRIAGE_SCHEMA } },
+      system: 'You triage inbound replies to a cold acquisition email for the operator. ' +
+        'You are not writing a reply - you are giving the operator a one-glance read of a lead list. ' +
+        'Never invent facts. Be honest that "not selling" or "already sold" replies need no further push.',
+      messages: [{ role: 'user', content: userContent }]
+    });
+    if (res.stop_reason === 'refusal') return { ok: false, error: 'the model declined this one' };
+
+    const text = (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+    if (!text.trim()) return { ok: false, error: 'empty response' };
+    let out;
+    try { out = JSON.parse(text); } catch (e) { return { ok: false, error: 'could not parse the response' }; }
+    if (!out || typeof out.summary !== 'string') return { ok: false, error: 'response had no summary' };
+
+    return {
+      ok: true,
+      summary: sanitize(out.summary).slice(0, 300),
+      actionNeeded: !!out.actionNeeded,
+      reason: sanitize(String(out.reason || '')).slice(0, 200)
     };
   } catch (e) {
     return { ok: false, error: e.message || String(e) };
@@ -467,7 +544,7 @@ function sanitize(body) {
 }
 
 module.exports = {
-  draftReply, transform, transformBrief, actionBrief, scopedBrief, isEnabled, keyStatus, setKey, testKey,
+  draftReply, triageReply, transform, transformBrief, actionBrief, scopedBrief, isEnabled, keyStatus, setKey, testKey,
   systemPrompt, leadContext, threadBlock, sanitize,
   TONES, LENGTHS, MODEL, DAILY_CAP, KEY_SETTING
 };

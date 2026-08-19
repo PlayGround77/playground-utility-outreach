@@ -183,6 +183,36 @@ replied is the case that matters most, and a first-reply-only test misses it ent
   the counts alike — one definition, not three.
 - The row stripe hangs off the **pinned first cell**, because the Reply column scrolls out of view.
 
+### Not every reply that "needs an answer" mechanically actually needs one
+
+`needsReply` stays purely timestamp-based on purpose — it is a factual, deterministic signal ("their
+message is newer than ours") that must never depend on an AI's judgement, or a genuinely pending
+lead could silently vanish from the list on a bad guess. What the AI *can* do is say whether the
+message is worth interrupting the operator for: a lead with a call already booked, or one already
+mid-diligence, often writes something that needs no reply at all (a scheduling confirmation, "looking
+forward to it").
+
+- **`ai.triageReply({lead, thread, replySnippet})`** (`src/ai.js`) returns `{summary, actionNeeded,
+  reason}` — a one/two-sentence read of the conversation for the operator, plus a boolean judgement
+  and why. It is triage, not a reply: it never addresses the lead, and the system prompt says so
+  explicitly. `effort: 'low'`, no `thinking` block — this is a cheap classification, not adaptive
+  reasoning, unlike `draftReply()`.
+- **Computed once per genuinely NEW inbound message, in `replywatcher.js`** — never on dashboard load.
+  Six leads in the banner would otherwise mean six AI calls (plus a full-thread Gmail fetch each) on
+  every single page view. The result is stored (`ai_summary`, `ai_action_needed`, `ai_action_reason`)
+  and the dashboard just reads it. `ai.isEnabled()` is checked *before* fetching the thread, so a
+  disabled key costs nothing extra, not even a wasted Gmail call.
+- **A triage failure never loses the reply itself** — wrapped in its own `try/catch`, logged and
+  swallowed, same principle as review-mining in `refill.js`. Losing the AI read is acceptable; losing
+  the fact that they replied is not.
+- **The banner still lists the lead either way.** When `ai_action_needed === 'no'` the bold "✍️ Draft
+  a reply →" is replaced by a muted "✓ probably no reply needed" pill (with the reason as its title)
+  plus a small "Draft a reply anyway →", not a removal — the operator glances past it instead of being
+  nagged, but nothing is ever hidden outright on an AI's say-so.
+- `leadContext()` now includes the operator-set response status (`l.response`) — "Booked a call" /
+  "Reviewing Data" is exactly the context that makes "no action needed" the right call, and it costs
+  `draftReply()` nothing extra either.
+
 ### The reply page loads in two stages
 
 `GET /reply/:id` renders immediately with the rule-based draft; the browser then calls
@@ -311,6 +341,28 @@ counting loop and a filter branch that must be kept in sync.
   should get that total.
 - `.tile:hover` repeats `text-decoration:none` because the global `a:hover` rule is more specific
   than `.tile` and would underline the number and the label.
+
+### A mobile card list, built from the same cells as the table
+
+The main table has ~24 columns; on a phone that means either a tiny unreadable table or endless
+sideways scrolling past the pinned Studio/Actions columns. `.cards` is a second rendering of the
+same `shown` array, one `<div class="lcard">` per lead instead of a `<tr>`, shown instead of the
+table under `max-width:760px` (`.card.wrap{display:none}` / `.cards{display:block}`).
+
+- **It reuses the exact same cell-builder functions as the table** — `contactCell()`, `phoneCell()`,
+  `appCell()`, `findPersonCell()`, `selectCell()` — so the two views can never disagree about a lead;
+  only the layout differs, never the logic. `replyCell()` and `actionsCell()` were pulled out of the
+  table's own `<td>` markup into small functions for the same reason, so the Preview/Send/Block/Delete
+  buttons and the reply-snippet/NEEDS-REPLY link are one implementation shared by both views, not two.
+- **Both views always render**, every request — CSS decides which one is visible. That is deliberate:
+  a server-rendered page with no client framework has no reliable way to know the viewport before
+  sending HTML, and building both is cheap next to a database round-trip.
+- Deliberately **fewer fields than the desktop table** — the pure numeric/analytics columns (Inst/day,
+  Total inst, Apps, $/inst, Priority, Country, Group) are dropped in favour of the ones you act on
+  (Opportunity, contact/phone/site/LinkedIn, both status dropdowns, the reply, the actions). Deep
+  analysis is what the desktop table is for.
+- Any test counting rows by `class="rowchk"` must scope to the table's own `<tbody>` first — every
+  lead now renders that checkbox twice (once per view), so an unscoped count silently doubles.
 
 ### The filter/search follows you, until you explicitly clear it
 
