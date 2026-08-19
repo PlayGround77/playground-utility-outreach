@@ -205,10 +205,20 @@ forward to it").
 - **A triage failure never loses the reply itself** — wrapped in its own `try/catch`, logged and
   swallowed, same principle as review-mining in `refill.js`. Losing the AI read is acceptable; losing
   the fact that they replied is not.
-- **The banner still lists the lead either way.** When `ai_action_needed === 'no'` the bold "✍️ Draft
-  a reply →" is replaced by a muted "✓ probably no reply needed" pill (with the reason as its title)
-  plus a small "Draft a reply anyway →", not a removal — the operator glances past it instead of being
-  nagged, but nothing is ever hidden outright on an AI's say-so.
+- **`needsReply` (the row stripe, the tiles) and `bannerWaiting` (what the "waiting on you" banner
+  actually shows) are two different lists on purpose.** `needsReply` stays mechanical everywhere
+  outside the banner. The banner is the one place allowed to lean on the AI: a lead is dropped from
+  `bannerWaiting` — not just muted — only when `ai_action_needed === 'no'` **and** `!awaitingUs`
+  (they have not written again since our last answer). That second condition is what keeps this
+  safe: someone who wrote again after we already replied is the strongest signal that they are still
+  engaged, so that lead stays, muted rather than gone, even if the AI thinks the message itself needs
+  nothing back. The dropped lead is still fully `needsReply` everywhere else — the row stripe, the
+  tiles, the main table — only the banner's own list narrows.
+- When a lead does stay in the banner with `ai_action_needed === 'no'`, the bold "✍️ Draft a reply →"
+  is replaced by a muted "✓ probably no reply needed" pill (the reason as its title) plus a small
+  "Draft a reply anyway →" — softened, never silently gone.
+- **Each banner card has its own Response-status dropdown**, the same `selectCell()` the table uses -
+  so a quick "Booked a call" / "Not Relevant" doesn't require leaving the banner to find the row.
 - `leadContext()` now includes the operator-set response status (`l.response`) — "Booked a call" /
   "Reviewing Data" is exactly the context that makes "no action needed" the right call, and it costs
   `draftReply()` nothing extra either.

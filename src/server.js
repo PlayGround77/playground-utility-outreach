@@ -504,7 +504,14 @@ function makeApp() {
       const waiting = leads
         .filter((l) => l.needsReply)
         .sort((a, b) => String(b.last_inbound_at || '').localeCompare(String(a.last_inbound_at || '')));
-      const awaitingCount = waiting.filter((l) => l.awaitingUs).length;
+      // needsReply itself stays purely mechanical everywhere else (the row
+      // stripe, the tiles) - never let an AI guess hide a lead there. The
+      // banner is just a nag list though, so it is allowed to lean on the AI:
+      // drop a lead from it only when the AI found no action needed AND they
+      // have not written again since our last reply (the strongest signal
+      // that they really are still waiting on us).
+      const bannerWaiting = waiting.filter((l) => !(l.ai_action_needed === 'no' && !l.awaitingUs));
+      const awaitingCount = bannerWaiting.filter((l) => l.awaitingUs).length;
 
       // Status only — the keys themselves never reach the page.
       const aiKey = await ai.keyStatus();
@@ -718,16 +725,17 @@ function makeApp() {
 
         ${msg ? `<div class="banner">${msg}</div>` : ''}
 
-        ${waiting.length ? `<div class="banner" style="border-color:#10b981;background:#dcfce7;color:#065f46">
-          🎉 <b>${waiting.length} conversation${waiting.length === 1 ? '' : 's'} waiting on you.</b>
+        ${bannerWaiting.length ? `<div class="banner" style="border-color:#10b981;background:#dcfce7;color:#065f46">
+          🎉 <b>${bannerWaiting.length} conversation${bannerWaiting.length === 1 ? '' : 's'} waiting on you.</b>
           <a href="/?view=replied" style="margin-left:.5rem;font-weight:600">Show them →</a>
           <span style="opacity:.8">Newest first. ${awaitingCount ? `<b>${awaitingCount}</b> wrote again after your answer.` : ''}</span>
-          ${waiting.slice(0, 6).map((l) => {
-            // Timestamps decide whether a lead is IN this list - that stays
-            // purely mechanical (their message is newest, unanswered), never
-            // gated on the AI. What the AI can do is say whether it is worth
-            // interrupting you for: a lead already on a booked call or mid
-            // diligence often writes something that needs no reply at all.
+          ${bannerWaiting.slice(0, 6).map((l) => {
+            // bannerWaiting has already dropped the leads the AI cleared AND
+            // who haven't written again since our last answer - see its
+            // definition above. What's left here still needs the softer
+            // treatment for the ones the AI cleared but kept (they wrote
+            // again, the stronger "still waiting" signal): swap the bold CTA
+            // for a muted pill instead of hiding them.
             const noActionNeeded = l.ai_action_needed === 'no';
             return `
             <div style="margin-top:.5rem;padding:.5rem .7rem;background:#ffffff88;border-radius:8px">
@@ -737,6 +745,7 @@ function makeApp() {
               ${l.awaitingUs ? '<span class="pill" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5;margin-left:.4rem;font-size:.68rem">↩ replied after you</span>' : ''}
               ${Number(l.reply_count) > 1 ? `<span class="muted" style="font-size:.72rem;margin-left:.4rem">${l.reply_count} messages</span>` : ''}
               <span class="muted" style="font-size:.72rem;margin-left:.4rem">${esc(agoLabel(l.last_inbound_at))}</span>
+              <span style="display:inline-block;margin-left:.4rem;vertical-align:middle">${selectCell(l.id, 'response', RESPONSE_OPTS, l.response, backHere)}</span>
               ${noActionNeeded
                 ? `<span class="pill" style="background:#f1f5f9;color:#475569;border-color:#cbd5e1;margin-left:.4rem;font-size:.68rem" title="${esc(l.ai_action_reason)}">✓ probably no reply needed</span>
                    <a href="/reply/${l.id}${backQS}" style="margin-left:.4rem">Draft a reply anyway →</a>`
