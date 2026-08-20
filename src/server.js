@@ -185,7 +185,13 @@ function selectCell(id, name, opts, current, backHere) {
   </form>`;
 }
 
-function shell(inner) {
+/**
+ * The page frame. `side` is the optional settings-drawer content; when it is
+ * given, `sideOpen` decides whether the drawer starts open (rendered from
+ * ?panel=settings, so a save can come back with it still open) and `closeHref`
+ * is where the ✕ and the scrim point for browsers with no JS.
+ */
+function shell(inner, side, sideOpen, closeHref) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(config.brand.companyName)} Outreach</title>
@@ -336,7 +342,53 @@ function shell(inner) {
   .wrap{cursor:grab;-webkit-overflow-scrolling:touch}
   .wrap.dragging{cursor:grabbing;user-select:none}
   .wrap.dragging *{pointer-events:none}
-</style></head><body><div class="container">${inner}</div>
+
+  /* ---- settings drawer -------------------------------------------------
+     The open state lives on <body>, not on the aside, so the server can
+     render the drawer already open for ?panel=settings with no JS at all.
+     That is what keeps it open across a save round-trip. */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:80;
+         opacity:0;pointer-events:none;transition:opacity .18s}
+  body.side-open .scrim{opacity:1;pointer-events:auto}
+  .side{position:fixed;top:0;right:0;height:100dvh;width:min(430px,100%);z-index:90;
+        background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;
+        padding:1rem;transform:translateX(102%);transition:transform .2s ease;
+        box-shadow:-12px 0 28px rgba(0,0,0,.18)}
+  body.side-open .side{transform:none}
+  .side-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.8rem}
+  .side-head h2{font-size:1rem;margin:0;font-weight:650}
+  .side-x{margin-left:auto;font-size:1.4rem;line-height:1;color:var(--muted);padding:0 .4rem}
+  .side-x:hover{color:var(--ink);text-decoration:none}
+  .side details.crit{margin-bottom:.6rem;padding:.6rem .8rem}
+  /* The drawer is far narrower than the page the criteria grid was built
+     for, so let it fall to two columns instead of stretching one. */
+  .side .grid{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+  .side .toolgrid{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem}
+  .side .seg{flex-wrap:wrap}
+
+  /* ---- filter card ----------------------------------------------------- */
+  .filters{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+           padding:.6rem .8rem;margin:.4rem 0 .8rem}
+  .search{position:relative;display:inline-flex;align-items:center;flex:1 1 200px;min-width:170px}
+  .search input{width:100%;padding-left:1.75rem}
+  .search::before{content:"🔍";position:absolute;left:.45rem;font-size:.78rem;opacity:.55;pointer-events:none}
+  /* Every applied filter, visible and individually removable. Without this a
+     filter set inside the collapsed "More filters" panel is invisible, and
+     the only way out is Clear-everything. */
+  .chips{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin-top:.5rem}
+  .chip{display:inline-flex;align-items:center;gap:.35rem;background:var(--chip);color:var(--accent);
+        border:1px solid var(--line);border-radius:999px;padding:.12rem .5rem;font-size:.78rem;font-weight:600}
+  .chip a{color:inherit;opacity:.65;font-weight:700;text-decoration:none;line-height:1}
+  .chip a:hover{opacity:1;text-decoration:none}
+  .fcount{display:inline-block;min-width:1.15rem;padding:0 .3rem;border-radius:999px;background:var(--accent);
+          color:var(--accent-ink);font-size:.68rem;font-weight:700;text-align:center;vertical-align:.05rem}
+  /* Destructive bulk buttons stay out of sight until something is ticked. */
+  .bulkbar{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin:.4rem 0;padding:.45rem .7rem;
+           background:var(--chip);border:1px solid var(--accent);border-radius:10px}
+  .bulkbar[hidden]{display:none}
+</style></head><body${sideOpen ? ' class="side-open"' : ''}><div class="container">${inner}</div>
+${side ? `<a class="scrim" id="sidescrim" href="${esc(closeHref)}" aria-label="Close settings"></a>
+<aside class="side" id="sidepanel">${side}</aside>` : ''}
 <script>
 (function(){
   // Drag-to-scroll (click-and-hold, then move) for any wide table wrapper.
@@ -384,7 +436,10 @@ function shell(inner) {
     closeAll(inside);
   });
   document.addEventListener('keydown', function(e){
-    if(e.key === 'Escape') closeAll(null);
+    if(e.key !== 'Escape') return;
+    closeAll(null);
+    // Same key, same handler - a second keydown listener would race this one.
+    setSide(false);
   });
   // Close shortly after the pointer leaves, with a grace period so crossing the
   // gap between the icon and the panel does not shut it. Mouse only: on a touch
@@ -436,6 +491,57 @@ function shell(inner) {
       if(Date.now() - openedAt > 500) closeAll(null);
     }, { passive: true });
   });
+
+  // ---- settings drawer ---------------------------------------------------
+  // The ⚙ button and the ✕/scrim are real links (?panel=settings and back),
+  // so the drawer works with JS off. Here we intercept them and just toggle
+  // the class, which avoids a page load for what is only a panel opening.
+  // The URL is kept in sync so a refresh - or a form inside the drawer that
+  // posts and redirects - lands in the same state.
+  function setSide(on){
+    if(!document.getElementById('sidepanel')) return;
+    document.body.classList.toggle('side-open', on);
+    if(!window.history || !history.replaceState) return;
+    var u = new URL(window.location.href);
+    if(on) u.searchParams.set('panel','settings'); else u.searchParams.delete('panel');
+    history.replaceState(null, '', u.pathname + (u.search || '') );
+  }
+  document.addEventListener('click', function(e){
+    var t = e.target;
+    if(!t || typeof t.closest !== 'function') return;
+    var open = t.closest('[data-side="open"]');
+    var shut = t.closest('[data-side="close"]');
+    if(!open && !shut) return;
+    e.preventDefault();
+    setSide(!!open);
+  });
+
+  // ---- bulk actions appear only once rows are ticked ---------------------
+  // A lead renders its checkbox twice (mobile card + table row), so count
+  // distinct values - a raw length double-reports every selection.
+  var bulkbar = document.querySelector('.bulkbar');
+  if(bulkbar){
+    var out = bulkbar.querySelector('.bulkcount');
+    function syncBulk(){
+      var seen = {}, n = 0;
+      document.querySelectorAll('.rowchk:checked').forEach(function(c){
+        if(!seen[c.value]){ seen[c.value] = 1; n++; }
+      });
+      bulkbar.hidden = n === 0;
+      if(out) out.textContent = n + (n === 1 ? ' lead selected' : ' leads selected');
+    }
+    document.addEventListener('change', function(e){
+      if(e.target && e.target.classList && e.target.classList.contains('rowchk')) syncBulk();
+    });
+    // "Select all shown" ticks boxes from script, which fires no change event.
+    document.querySelectorAll('[data-selectall]').forEach(function(box){
+      box.addEventListener('click', function(){
+        document.querySelectorAll('.rowchk').forEach(function(c){ c.checked = box.checked; });
+        syncBulk();
+      });
+    });
+    syncBulk();
+  }
 })();
 </script>
 </body></html>`;
@@ -470,6 +576,8 @@ function makeApp() {
         { key: 't_fu2', label: 'Follow-up 2', test: (l) => l.outreach === S.fu2Sent },
         { key: 'replied', label: 'Replied', test: (l) => l.response === config.responses.respond,
           hint: 'They wrote back' },
+        { key: 'booked', label: 'Booked calls', test: (l) => l.response === config.responses.bookedCall,
+          hint: 'A call is scheduled with them - the funnel is working' },
         { key: 'reviewing', label: 'Reviewing Data', test: (l) => l.response === config.responses.reviewingData,
           hint: 'They gave us access and we are going through their numbers' },
         { key: 't_closed', label: 'Closed', test: (l) => l.outreach === S.sequenceClosed,
@@ -504,14 +612,24 @@ function makeApp() {
       const waiting = leads
         .filter((l) => l.needsReply)
         .sort((a, b) => String(b.last_inbound_at || '').localeCompare(String(a.last_inbound_at || '')));
+      // A booked call or an open data review is a conversation already moving,
+      // not one waiting on an answer. That status was set by hand, so it is a
+      // stronger statement about where the lead stands than the mechanical
+      // "their message is newer" test - and the banner should stop asking.
+      const QUIET_RESPONSES = [config.responses.bookedCall, config.responses.reviewingData];
+      const isQuiet = (l) => QUIET_RESPONSES.includes(l.response);
       // needsReply itself stays purely mechanical everywhere else (the row
       // stripe, the tiles) - never let an AI guess hide a lead there. The
       // banner is just a nag list though, so it is allowed to lean on the AI:
       // drop a lead from it only when the AI found no action needed AND they
       // have not written again since our last reply (the strongest signal
       // that they really are still waiting on us).
-      const bannerWaiting = waiting.filter((l) => !(l.ai_action_needed === 'no' && !l.awaitingUs));
+      const bannerWaiting = waiting.filter((l) =>
+        !isQuiet(l) && !(l.ai_action_needed === 'no' && !l.awaitingUs));
       const awaitingCount = bannerWaiting.filter((l) => l.awaitingUs).length;
+      // Hidden, not forgotten: they still wrote, and one of them rescheduling
+      // or sending numbers matters. One muted line, no cards.
+      const quietCount = waiting.filter(isQuiet).length;
 
       // Status only — the keys themselves never reach the page.
       const aiKey = await ai.keyStatus();
@@ -553,9 +671,39 @@ function makeApp() {
         appsMin: qp.f_appsMin, appsMax: qp.f_appsMax,
         prioMax: qp.f_prioMax
       };
-      const anyFilterActive = f.q || f.platform || f.outreach || f.response ||
-        f.oppMin || f.oppMax || f.instMin || f.instMax || f.ratingMin || f.revMax ||
-        f.appsMin || f.appsMax || f.prioMax;
+      // One list drives the chip row, the "N active" badge and whether any
+      // filter is on at all - the same reason TILES owns both its count and
+      // its predicate. A hand-maintained boolean beside a hand-maintained
+      // chip list is exactly how "Clear filters" goes missing for one field.
+      // `adv` marks the ones hidden inside the collapsed More-filters panel.
+      const CHIPS = [
+        { k: 'q', label: (v) => `“${v}”` },
+        { k: 'platform', label: (v) => (v === 'ios' ? '🍎 iOS' : '🤖 Android') },
+        { k: 'f_outreach', adv: true, label: (v) => `Outreach: ${v}` },
+        { k: 'f_response', adv: true, label: (v) => `Response: ${v}` },
+        { k: 'f_oppMin', adv: true, label: (v) => `Opp ≥ ${v}` },
+        { k: 'f_oppMax', adv: true, label: (v) => `Opp ≤ ${v}` },
+        { k: 'f_instMin', adv: true, label: (v) => `Installs ≥ ${num(v)}` },
+        { k: 'f_instMax', adv: true, label: (v) => `Installs ≤ ${num(v)}` },
+        { k: 'f_ratingMin', adv: true, label: (v) => `★ ≥ ${v}` },
+        { k: 'f_revMax', adv: true, label: (v) => `Rev/mo ≤ $${num(v)}` },
+        { k: 'f_appsMin', adv: true, label: (v) => `Apps ≥ ${v}` },
+        { k: 'f_appsMax', adv: true, label: (v) => `Apps ≤ ${v}` },
+        { k: 'f_prioMax', adv: true, label: (v) => `Priority ≤ ${num(v)}` }
+      ];
+      const activeChips = CHIPS.filter((c) => String(qp[c.k] || '').trim() !== '');
+      const anyFilterActive = activeChips.length > 0;
+      const advCount = activeChips.filter((c) => c.adv).length;
+      // This exact URL with one param set or removed. Rebuilding from req.url
+      // means everything else currently applied survives untouched - which is
+      // what lets a chip's × drop only its own filter, and lets the settings
+      // drawer keep itself open across a save without disturbing the view.
+      const urlWith = (k, v) => {
+        const p = new URLSearchParams(req.url.split('?')[1] || '');
+        if (v === null) p.delete(k); else p.set(k, v);
+        const s = p.toString();
+        return '/' + (s ? '?' + s : '');
+      };
       function num2(v) { const n = Number(v); return v !== undefined && v !== '' && Number.isFinite(n) ? n : null; }
       if (anyFilterActive) {
         shown = shown.filter((l) => {
@@ -597,6 +745,14 @@ function makeApp() {
       // it, both by navigating to a plain "/" on purpose.
       const backHere = req.url;
       const backQS = '?back=' + encodeURIComponent(backHere);
+
+      // Settings drawer. Rendering the open state server-side from ?panel is
+      // what makes it survive a save: every form inside the drawer carries
+      // `back` = this view *with* panel=settings, so /keys, /criteria and the
+      // rest redirect back to the same filtered list, drawer still open.
+      const sideOpen = req.query.panel === 'settings';
+      const backPanel = urlWith('panel', 'settings');
+      const closeHref = urlWith('panel', null);
 
       // Shared between the desktop table and the mobile card list, so the two
       // views can never show different reply/action state for the same lead -
@@ -704,22 +860,178 @@ function makeApp() {
           <div class="n">${n}</div><div class="l">${esc(t.label)}</div></a>`;
       };
 
+      // Everything in the drawer posts back to `backPanel`, so a save returns
+      // to this same filtered view with the drawer still open.
+      const sidePanel = `
+        <div class="side-head">
+          <h2>⚙ Settings</h2>
+          <a class="side-x" href="${esc(closeHref)}" data-side="close" title="Close settings">✕</a>
+        </div>
+
+        <details class="crit" open>
+          <summary>✉️ Sending</summary>
+          <div class="bar" style="margin:.6rem 0">${dryToggle}<span class="seg">${modeCtl}</span></div>
+          <p class="muted" style="font-size:.8rem;margin:.2rem 0">
+            Window: <b>${wOpen ? 'OPEN' : 'closed'}</b> (${config.sender.windowStartHour}:00–${config.sender.windowEndHour}:00, Mon–Fri).
+            Sent today: <b>${sentToday}</b> of ${quota}.
+          </p>
+          <form method="post" action="/quota" class="stack" style="margin-top:.4rem">
+            <input type="hidden" name="back" value="${esc(backPanel)}">
+            <label style="display:block;font-size:.8rem;color:var(--muted)">Emails per day
+              <input name="value" value="${crit.dailyQuotaOverride || ''}" placeholder="${quota}" style="width:100%;margin-top:.2rem">
+              <span class="help">A fixed number of emails to send per day. Leave empty or 0 to use the automatic warm-up ramp (currently ${quota}/day).</span>
+            </label>
+            <button style="margin-top:.4rem">Save quota</button>
+          </form>
+        </details>
+
+        <details class="crit"${gmailConnected && aiKey.set ? '' : ' open'}>
+          <summary>🔗 Connections${gmailConnected && aiKey.set ? '' : ' <span class="fcount">!</span>'}</summary>
+
+          <p class="muted" style="font-size:.82rem;margin:.5rem 0">
+            ${gmailConnected
+              ? 'Gmail is connected - email can be sent.'
+              : `<b style="color:#b45309">Gmail is not connected</b> - no email can be sent until you connect it.${config.google.clientId
+                  ? ''
+                  : ' Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in Railway first.'}`}
+          </p>
+          ${!gmailConnected && config.google.clientId
+            ? `<form method="get" action="/oauth/start"><button class="primary">🔗 Connect Gmail</button></form>
+               <div class="muted" style="font-size:.78rem;margin-top:.4rem">In Google Cloud, register this exact Authorized redirect URI: <code>${esc(redirectUri)}</code></div>`
+            : ''}
+
+          <p class="muted" style="font-size:.8rem;margin:.8rem 0 .3rem">
+            Keys are stored in the database and take effect immediately — no redeploy.
+            They are write-only here: once saved, only the last four characters are ever shown again.
+            A key saved here overrides the matching Railway variable.
+          </p>
+
+          <form method="post" action="/keys" class="stack" style="margin-bottom:.9rem">
+            <input type="hidden" name="which" value="anthropic">
+            <input type="hidden" name="back" value="${esc(backPanel)}">
+            <label style="display:block;font-size:.8rem;color:var(--muted)">
+              Anthropic API key — writes the reply to every lead who answers.
+              ${aiKey.set
+                ? `<b>Connected</b> (${esc(aiKey.hint)}, from ${aiKey.source === 'dashboard' ? 'this dashboard' : 'Railway'}).`
+                : '<b style="color:#b45309">Not connected</b> — replies fall back to templates.'}
+              Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
+              <input name="key" type="password" autocomplete="off" spellcheck="false"
+                     placeholder="${aiKey.set ? 'Saved (' + esc(aiKey.hint) + ') — type a new key to replace it' : 'sk-ant-…'}"
+                     style="width:100%;margin-top:.2rem">
+            </label>
+            <div class="toolgrid">
+              <button class="primary">Save key</button>
+              ${aiKey.set ? `<button formaction="/keys/test" title="Spends a few tokens on a one-word request to prove the key works">🧪 Test it</button>
+                <button formaction="/keys/clear" onclick="return confirm('Remove the saved Anthropic key? Replies will fall back to templates.')">Remove</button>` : ''}
+            </div>
+            ${aiKey.shadowsEnv ? `<div class="muted" style="font-size:.78rem;margin-top:.4rem">
+              Note: <code>ANTHROPIC_API_KEY</code> is also set in Railway but is <b>not</b> being used — the key saved here wins. Remove this one to fall back to it.</div>` : ''}
+          </form>
+
+          <form method="post" action="/keys" class="stack">
+            <input type="hidden" name="which" value="apify">
+            <input type="hidden" name="back" value="${esc(backPanel)}">
+            <label style="display:block;font-size:.8rem;color:var(--muted)">
+              Apify token <span style="opacity:.8">(optional)</span> — automatic LinkedIn lookup. Costs money per lookup.
+              ${apifyKey.set ? `<b>Saved</b> (${esc(apifyKey.hint)}, from ${apifyKey.source === 'dashboard' ? 'this dashboard' : 'Railway'}).` : 'Not set — the 🔍 Find searches still work by hand.'}
+              <input name="key" type="password" autocomplete="off" spellcheck="false"
+                     placeholder="${apifyKey.set ? 'Saved — type a new token to replace it' : 'apify_api_…'}"
+                     style="width:100%;margin-top:.2rem">
+            </label>
+            <div class="toolgrid">
+              <button>Save token</button>
+              ${apifyKey.set ? `<button formaction="/keys/clear" onclick="return confirm('Remove the saved Apify token?')">Remove</button>` : ''}
+            </div>
+            ${apifyKey.shadowsEnv ? `<div class="muted" style="font-size:.78rem;margin-top:.4rem">
+              Note: <code>APIFY_TOKEN</code> is also set in Railway but is <b>not</b> being used — the token saved here wins.</div>` : ''}
+          </form>
+        </details>
+
+        <details class="crit">
+          <summary>🔎 Search criteria</summary>
+          <p class="muted" style="font-size:.8rem;margin:.5rem 0">Saved to the database; takes effect on the next “Source now” and scheduled refill.</p>
+          <form method="post" action="/criteria" class="stack">
+            <input type="hidden" name="back" value="${esc(backPanel)}">
+            <label style="display:block;font-size:.8rem;color:var(--muted)">Categories (comma-separated Google Play APP categories)
+              <input name="categories" value="${esc(crit.categories.join(','))}" style="width:100%;margin-top:.2rem"></label>
+            <div class="grid">
+              <label>All-time installs — min<input name="installsTotalMin" value="${esc(crit.installsTotalMin)}"></label>
+              <label>All-time installs — max<input name="installsTotalMax" value="${esc(crit.installsTotalMax)}"></label>
+              <label>Min rating (0–5)<input name="minRating" value="${esc(crit.minRating)}"></label>
+              <label>Min # of ratings<input name="minRatingCount" value="${esc(crit.minRatingCount)}"></label>
+              <label>Min apps per dev<input name="minApps" value="${esc(crit.minApps)}"></label>
+              <label>Max apps per dev (avoid farms)<input name="maxApps" value="${esc(crit.maxApps)}"></label>
+              <label>Max revenue / month ($)<input name="revenueMax" value="${esc(crit.revenueMax)}"></label>
+              <label>Flag giants above priority<input name="maxPriority" value="${esc(crit.maxPriority)}"></label>
+              <label>Pages per category<input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
+              <label>Source target (apps)<input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
+            </div>
+            <label style="display:flex;align-items:flex-start;gap:.4rem;margin:.4rem 0;font-size:.82rem">
+              <input type="checkbox" name="scanReviews" ${crit.scanReviews ? 'checked' : ''} style="margin-top:.2rem">
+              <span>Mine reviews for buy-signals (“too expensive”, “should be free”…) — boosts Opportunity, uses more API credits</span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:.4rem;margin:.4rem 0;font-size:.82rem">
+              <input type="checkbox" name="enrichFromSite" ${crit.enrichFromSite ? 'checked' : ''} style="margin-top:.2rem">
+              <span>Read each studio’s own website for the founder’s name and LinkedIn — free (no API credits), but makes sourcing slower</span>
+            </label>
+            <button class="primary">Save criteria</button>
+            <span class="help">Valid categories: ${criteria.VALID_CATEGORIES.join(', ')}</span>
+          </form>
+        </details>
+
+        <details class="crit">
+          <summary>🧰 Tools</summary>
+          <div class="toolgrid">
+            <form method="post" action="/test-email"><input type="hidden" name="back" value="${esc(backPanel)}"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
+            <form method="get" action="/duplicates"><button title="Review &amp; merge duplicate leads (same email) — combine their apps into one">🔁 Duplicates${dupCount ? ' (' + dupCount + ')' : ''}</button></form>
+            <form method="get" action="/audit"><button title="Find possibly-irrelevant leads (giants, junk) to review and block">🔎 Audit</button></form>
+            <form method="get" action="/reviews"><button title="See the actual review quotes behind every 💬 buy-signal badge">💬 Reviews</button></form>
+            ${blankNameCount ? `<form method="post" action="/admin/fix-names" onsubmit="return confirm('Fix ${blankNameCount} lead(s) with a blank Studio name?')"><input type="hidden" name="back" value="${esc(backPanel)}"><button class="primary" title="AppStoreSpy returned no developer name for these — fill in the app name or developer ID instead of leaving it blank">🩹 Fix ${blankNameCount} blank name${blankNameCount === 1 ? '' : 's'}</button></form>` : ''}
+            ${cov.needs_enrich ? `<form method="post" action="/admin/enrich"><input type="hidden" name="back" value="${esc(backPanel)}"><input type="hidden" name="batch" value="50"><button title="Read up to 50 studio websites for a founder name, a phone number and a LinkedIn link. Free - no API credits - but takes a minute.">🔎 Find people (${cov.needs_enrich})</button></form>` : ''}
+          </div>
+          <div class="toolgrid" style="margin-top:.8rem;border-top:1px solid var(--line);padding-top:.6rem">
+            <form method="post" action="/admin/clear" onsubmit="return confirm('Delete ALL leads and events? This cannot be undone.')"><input type="hidden" name="back" value="${esc(backPanel)}"><button title="Delete all leads to start fresh">🗑 Clear all leads</button></form>
+          </div>
+        </details>
+
+        <details class="crit">
+          <summary>ℹ️ What do these columns &amp; filters mean?</summary>
+          <div style="margin-top:.6rem;font-size:.82rem;line-height:1.7">
+            <b>Opp (Opportunity Score, 0–100):</b> how good an acquisition target this app is — high demand (rating, reviews, installs) combined with weak monetization (low/no revenue, no ads/IAP) and signs it's cheap to buy (solo dev, no website, few apps). Higher is better. This is what the list is sorted by.<br>
+            <b>Priority:</b> installs/day × total apps published by this developer. It is a raw "how big is this developer" number, used only as a tie-breaker after Opportunity — a high Priority is <i>not</i> a good sign by itself (Google/Samsung score millions here); use "Priority max" in filters to hide giants.<br>
+            <b>Total inst / Inst/day:</b> all-time installs of this specific app, and the developer's current daily install velocity (still-alive demand).<br>
+            <b>Rev/mo, $/inst:</b> the app's estimated monthly revenue, and revenue per install (low = weak monetization = upside).<br>
+            <b>💬 badge:</b> number of reviews found complaining about price/ads or offering to pay — open <b>👁 Preview</b> on that lead to read the actual quotes.<br>
+            <b>Site:</b> 🌐 is the studio's own website. It comes from Google Play when listed; otherwise it is inferred from the privacy-policy link or the email domain. A dash means we found nothing, which is itself a solo-dev signal (the score only counts a website Google Play actually listed).<br>
+            <b>Contact:</b> the person behind the app. <b>✅</b> means the name was read off the studio's own website and is reliable. <b>~</b> means it was split out of the email address (jane.doe@… → Jane Doe) and is a <i>guess</i> — never address someone by a ~ name without checking. Outreach emails deliberately keep using the studio name.<br>
+            <b>Phone:</b> a number the studio published <i>as</i> a phone number — a tap-to-call link or a "Phone:"/"Tel:" line on their own site, or the store listing's developer contact. Tap it to call. There is deliberately no digit-scraping fallback: a page is full of digit runs (company and VAT numbers, dates, postcodes), and a wrong number here means calling a stranger. A dash means they published none.<br>
+            <b>Country:</b> where the studio is based, from AppStoreSpy. Its job is to narrow down a common name on LinkedIn.<br>
+            <b>Response status:</b> "Respond" is set automatically on their first reply. Everything after that is set by
+            hand as the conversation moves: <b>Booked a call</b>, <b>Reviewing Data</b> (they gave us access and we are going
+            through their numbers), <b>Not Relevant</b>, or <b>No Response</b> (closed out after both follow-ups with silence).
+            Setting <b>Booked a call</b> or <b>Reviewing Data</b> also stops the green "waiting on you" banner from nagging
+            about that lead — the conversation is already moving. It still shows the red NEEDS REPLY stripe in the list.<br>
+            <b>The tiles at the top are clickable</b> — each one filters the table to exactly the leads it counted, and "← Back to all" clears it.<br>
+            <b>Filter chips:</b> every filter you apply appears as a chip under the search box — click its × to remove just that one.<br>
+            <b>Contact coverage right now:</b> ${cov.total} lead${cov.total === 1 ? '' : 's'} —
+            ${cov.with_site} with a website, ${cov.with_name} with a contact name
+            (${cov.name_verified} of those verified from the studio site),
+            ${cov.with_linkedin} with a LinkedIn URL, ${cov.with_phone} with a phone, ${cov.with_country} with a country.
+            Check these numbers before paying for external enrichment: if the free steps already cover most leads, there is nothing to buy.<br>
+            <b>LinkedIn:</b> a <span style="color:#0A66C2;font-weight:600">blue</span> icon is a real link — a profile or company page the studio published on its own website, found while reading their site. A <span class="muted" style="font-weight:600">grey</span> icon means nothing was found there, and opens ready-made <i>searches</i> for this lead — by name + studio, by name + country, by app name (developers often list their own app in their profile), and by studio + role. Those are searches, not verified profiles: you pick the right person.<br>
+            <b>View:</b> quick presets (e.g. "Queue" = never contacted yet). <b>Search:</b> matches Studio/App/Category/Email. <b>OS:</b> Android vs iOS (only Android is sourced today).
+          </div>
+        </details>`;
+
       res.send(shell(`
         <header>
           <h1>${esc(config.brand.companyName)} Utility Outreach</h1>
-          ${mode} ${sendPill} ${gmailPill} ${dryToggle}
+          ${mode} ${sendPill} ${gmailPill}
           <div class="toolbar">
-            <form method="post" action="/run/refill"><button class="primary" title="Fetch new utility-app studios from AppStoreSpy using the search criteria below, screen them, and add them as leads">Source now</button></form>
+            <form method="post" action="/run/refill"><button class="primary" title="Fetch new utility-app studios from AppStoreSpy using the search criteria in Settings, screen them, and add them as leads">Source now</button></form>
             <form method="post" action="/run/send"><button title="Send one paced batch now to leads in the queue — respects the daily quota, the send window, and DRY/LIVE mode">Send tick</button></form>
             <form method="post" action="/run/watch"><button title="Scan the inbox now for replies and bounces and update lead statuses">Check replies</button></form>
-            <span class="seg">${modeCtl}</span>
-            <form method="post" action="/test-email"><button title="Send a test email to your own inbox to verify Gmail works (bypasses DRY, only emails you)">✉ Test to me</button></form>
-            <form method="get" action="/duplicates"><button title="Review & merge duplicate leads (same email) — combine their apps into one">🔁 Duplicates</button></form>
-            ${blankNameCount ? `<form method="post" action="/admin/fix-names" onsubmit="return confirm('Fix ${blankNameCount} lead(s) with a blank Studio name?')"><button class="primary" title="AppStoreSpy returned no developer name for these — fill in the app name or developer ID instead of leaving it blank">🩹 Fix ${blankNameCount} blank name${blankNameCount === 1 ? '' : 's'}</button></form>` : ''}
-            ${cov.needs_enrich ? `<form method="post" action="/admin/enrich"><input type="hidden" name="batch" value="50"><button title="Read up to 50 studio websites for a founder name, a phone number and a LinkedIn link. Free - no API credits - but takes a minute.">🔎 Find people (${cov.needs_enrich})</button></form>` : ''}
-            <form method="get" action="/audit"><button title="Find possibly-irrelevant leads (giants, junk) to review and block">🔎 Audit</button></form>
-            <form method="get" action="/reviews"><button title="See the actual review quotes behind every 💬 buy-signal badge">💬 Reviews</button></form>
-            <form method="post" action="/admin/clear" onsubmit="return confirm('Delete ALL leads and events? This cannot be undone.')"><button title="Delete all leads to start fresh">🗑 Clear</button></form>
+            <a href="${esc(backPanel)}" data-side="open" title="Sending mode, API keys, search criteria and tools"><button type="button">⚙ Settings</button></a>
           </div>
         </header>
 
@@ -755,24 +1067,22 @@ function makeApp() {
               <div style="opacity:.85;font-style:italic;margin-top:.2rem">“${esc(l.reply_snippet)}”</div>
             </div>`;
           }).join('')}
+          ${quietCount ? `<div class="muted" style="margin-top:.5rem;font-size:.8rem">
+            ${quietCount} more with a booked call / data review also wrote - not counted above, because that
+            conversation is already moving. <a href="/?view=booked">Show them →</a>
+          </div>` : ''}
         </div>` : ''}
 
         ${!gmailConnected ? `<div class="banner">📧 <b>Gmail is not connected</b> — no email can be sent until you connect it.
           ${config.google.clientId
-            ? '<form method="get" action="/oauth/start" style="display:inline;margin-left:.5rem"><button class="primary">🔗 Connect Gmail</button></form>'
+            ? `<a href="${esc(backPanel)}" data-side="open" style="margin-left:.5rem;font-weight:600">Connect it in ⚙ Settings →</a>`
             : ' Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in Railway first (see setup).'}
-          <div style="font-size:.8rem;margin-top:.4rem;opacity:.85">In Google Cloud, register this exact Authorized redirect URI: <code>${esc(redirectUri)}</code></div>
         </div>` : ''}
 
         <div class="status">
           <span>Window: <b>${wOpen ? 'OPEN' : 'closed'}</b> (${config.sender.windowStartHour}:00–${config.sender.windowEndHour}:00, Mon–Fri)</span>
-          <span>Sent today: <b>${sentToday}</b> /
-            <form method="post" action="/quota" style="display:inline-flex;align-items:center;gap:.3rem" title="Set a fixed number of emails to send per day. Leave empty/0 to use the automatic warm-up ramp (currently ${quota}/day).">
-              <input name="value" value="${crit.dailyQuotaOverride || ''}" placeholder="${quota}" style="width:55px;padding:.15rem .3rem">
-              <button style="padding:.15rem .5rem" title="Save this as the fixed daily email quota (0 = automatic ramp)">Set</button>
-            </form>
-          </span>
-          <span>Duplicates: <b>${dupCount}</b>${dupCount ? ' (click 🔁 Dedupe)' : ''}</span>
+          <span title="Change the daily quota in ⚙ Settings → Sending">Sent today: <b>${sentToday}</b> / ${quota}</span>
+          ${dupCount ? `<span>Duplicates: <b>${dupCount}</b> <a href="/duplicates">review →</a></span>` : ''}
           <span id="nexttick" data-mode="${sendMode}" data-dry="${dry ? '1' : '0'}">…</span>
           <span id="replytick" data-last="${esc(lastWatchRun)}" title="${esc(lastWatchStatus)}">…</span>
         </div>
@@ -783,157 +1093,65 @@ function makeApp() {
           <a href="/" style="margin-left:.5rem;font-weight:600">← Back to all</a>
         </div>` : ''}
 
-        <details class="crit"${aiKey.set ? '' : ' open'}>
-          <summary>🔑 API keys — ${aiKey.set
-            ? `Claude connected <span class="muted" style="font-weight:400">(${esc(aiKey.hint)}, from ${aiKey.source === 'dashboard' ? 'this dashboard' : 'Railway'})</span>`
-            : '<span style="color:#b45309">Claude not connected — replies fall back to templates</span>'}</summary>
-
-          <p class="muted" style="font-size:.85rem;margin:.5rem 0">
-            Keys are stored in the database and take effect immediately — no redeploy.
-            They are write-only here: once saved, only the last four characters are ever shown again.
-            A key saved on this page overrides the matching Railway variable.
-          </p>
-
-          <form method="post" action="/keys" class="stack" style="margin-bottom:.9rem">
-            <input type="hidden" name="which" value="anthropic">
-            <label style="display:block;font-size:.8rem;color:var(--muted)">
-              Anthropic API key — writes the reply to every lead who answers.
-              Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
-              <input name="key" type="password" autocomplete="off" spellcheck="false"
-                     placeholder="${aiKey.set ? 'Saved (' + esc(aiKey.hint) + ') — type a new key to replace it' : 'sk-ant-…'}"
-                     style="width:100%;margin-top:.2rem">
-            </label>
-            <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.5rem">
-              <button class="primary">Save key</button>
-              ${aiKey.set ? `<button formaction="/keys/test" title="Spends a few tokens on a one-word request to prove the key works">🧪 Test it</button>
-                <button formaction="/keys/clear" onclick="return confirm('Remove the saved Anthropic key? Replies will fall back to templates.')">Remove</button>` : ''}
-            </div>
-            ${aiKey.shadowsEnv ? `<div class="muted" style="font-size:.78rem;margin-top:.4rem">
-              Note: <code>ANTHROPIC_API_KEY</code> is also set in Railway but is <b>not</b> being used — the key saved here wins. Remove this one to fall back to it.</div>` : ''}
-          </form>
-
-          <form method="post" action="/keys" class="stack">
-            <input type="hidden" name="which" value="apify">
-            <label style="display:block;font-size:.8rem;color:var(--muted)">
-              Apify token <span style="opacity:.8">(optional)</span> — automatic LinkedIn lookup. Costs money per lookup.
-              ${apifyKey.set ? `<b>Saved</b> (${esc(apifyKey.hint)}, from ${apifyKey.source === 'dashboard' ? 'this dashboard' : 'Railway'}).` : 'Not set — the 🔍 Find searches still work by hand.'}
-              <input name="key" type="password" autocomplete="off" spellcheck="false"
-                     placeholder="${apifyKey.set ? 'Saved — type a new token to replace it' : 'apify_api_…'}"
-                     style="width:100%;margin-top:.2rem">
-            </label>
-            <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.5rem">
-              <button>Save token</button>
-              ${apifyKey.set ? `<button formaction="/keys/clear" onclick="return confirm('Remove the saved Apify token?')">Remove</button>` : ''}
-            </div>
-            ${apifyKey.shadowsEnv ? `<div class="muted" style="font-size:.78rem;margin-top:.4rem">
-              Note: <code>APIFY_TOKEN</code> is also set in Railway but is <b>not</b> being used — the token saved here wins.</div>` : ''}
-          </form>
-        </details>
-
-        <details class="crit">
-          <summary>🔎 Search criteria — edit &amp; save; affects the next “Source now”</summary>
-          <form method="post" action="/criteria">
-            <label style="display:block;font-size:.8rem;color:var(--muted)">Categories (comma-separated Google Play APP categories)
-              <input name="categories" value="${esc(crit.categories.join(','))}" style="width:100%;margin-top:.2rem"></label>
-            <div class="grid">
-              <label>All-time installs — min<input name="installsTotalMin" value="${esc(crit.installsTotalMin)}"></label>
-              <label>All-time installs — max<input name="installsTotalMax" value="${esc(crit.installsTotalMax)}"></label>
-              <label>Min rating (0–5)<input name="minRating" value="${esc(crit.minRating)}"></label>
-              <label>Min # of ratings<input name="minRatingCount" value="${esc(crit.minRatingCount)}"></label>
-              <label>Min apps per dev<input name="minApps" value="${esc(crit.minApps)}"></label>
-              <label>Max apps per dev (avoid farms)<input name="maxApps" value="${esc(crit.maxApps)}"></label>
-              <label>Max revenue / month ($)<input name="revenueMax" value="${esc(crit.revenueMax)}"></label>
-              <label>Flag giants above priority<input name="maxPriority" value="${esc(crit.maxPriority)}"></label>
-              <label>Pages per category<input name="pagesPerCategory" value="${esc(crit.pagesPerCategory)}"></label>
-              <label>Source target (apps)<input name="refillTarget" value="${esc(crit.refillTarget)}"></label>
-            </div>
-            <label style="display:flex;align-items:center;gap:.4rem;margin:.4rem 0">
-              <input type="checkbox" name="scanReviews" ${crit.scanReviews ? 'checked' : ''}>
-              Mine reviews for buy-signals (“too expensive”, “should be free”…) — boosts Opportunity, uses more API credits
-            </label>
-            <label style="display:flex;align-items:center;gap:.4rem;margin:.4rem 0">
-              <input type="checkbox" name="enrichFromSite" ${crit.enrichFromSite ? 'checked' : ''}>
-              Read each studio’s own website for the founder’s name and LinkedIn — free (no API credits), but makes sourcing slower
-            </label>
-            <button class="primary" title="Save these search criteria to the database; they take effect on the next “Source now” and scheduled refill">Save criteria</button>
-            <span class="muted" style="font-size:.78rem">Valid: ${criteria.VALID_CATEGORIES.join(', ')}</span>
-          </form>
-        </details>
-
         <form id="bulkform" method="post" action="/bulk"><input type="hidden" name="back" value="${esc(backHere)}"></form>
-        <div class="bar" style="margin:.4rem 0">
-          <label title="Check/uncheck every row currently shown (respects the active filters)"><input type="checkbox" onclick="document.querySelectorAll('.rowchk').forEach(function(c){c.checked=this.checked}.bind(this))"> Select all shown</label>
+        <div class="bulkbar" hidden>
+          <span class="bulkcount">0 selected</span>
           <button form="bulkform" name="action" value="block" onclick="return confirm('Block the selected leads?')" title="Move every checked row to the Block List — never contacted again">⛔ Block selected</button>
           <button form="bulkform" name="action" value="delete" onclick="return confirm('Delete the selected leads permanently?')" title="Permanently delete every checked row">🗑 Delete selected</button>
         </div>
-        <form method="get" action="/" id="filterform" style="margin:.4rem 0">
-          <div class="bar">
-            <label title="Quick presets: which leads to show based on their group/status">View:
-              <select name="view" onchange="this.form.submit()" title="Quick presets: which leads to show based on their group/status">
-                ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['blocked', 'Blocked only']]
-                  .map(([v, l]) => `<option value="${v}"${view === v ? ' selected' : ''}>${l}</option>`).join('')}
-              </select>
-            </label>
-            <input name="q" value="${esc(f.q)}" placeholder="Search studio, app, category, email…" style="width:220px" title="Free-text search across Studio, App name, Category, and Email">
-            <label title="Filter to only Android or only iOS leads">OS: <select name="platform" onchange="this.form.submit()" title="Filter to only Android or only iOS leads">
-              <option value=""${!f.platform ? ' selected' : ''}>All</option>
-              <option value="android"${f.platform === 'android' ? ' selected' : ''}>🤖 Android</option>
-              <option value="ios"${f.platform === 'ios' ? ' selected' : ''}>🍎 iOS</option>
-            </select></label>
-            <button type="submit" title="Apply the search box + OS filter above">Apply filters</button>
-            ${anyFilterActive ? '<a href="/" title="Remove every active filter and show the default view">Clear filters</a>' : ''}
-            <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
-          </div>
-          <details class="crit" style="margin-top:.4rem">
-            <summary>🎛 More column filters (Opportunity, Installs, Rating, Revenue, Apps, Priority, Outreach/Response)</summary>
-            <div class="grid" style="margin-top:.6rem">
-              <label title="Only show leads with an Opportunity Score at or above this (0–100)">Opportunity min<input name="f_oppMin" value="${esc(f.oppMin || '')}"></label>
-              <label title="Only show leads with an Opportunity Score at or below this (0–100)">Opportunity max<input name="f_oppMax" value="${esc(f.oppMax || '')}"></label>
-              <label title="Only show apps with at least this many all-time installs">Total installs min<input name="f_instMin" value="${esc(f.instMin || '')}"></label>
-              <label title="Only show apps with at most this many all-time installs">Total installs max<input name="f_instMax" value="${esc(f.instMax || '')}"></label>
-              <label title="Only show apps rated at or above this (0–5)">Rating min<input name="f_ratingMin" value="${esc(f.ratingMin || '')}"></label>
-              <label title="Only show leads earning at most this much per month — filters out already well-monetized apps">Revenue/mo max ($)<input name="f_revMax" value="${esc(f.revMax || '')}"></label>
-              <label title="Only show developers with at least this many published apps">Apps count min<input name="f_appsMin" value="${esc(f.appsMin || '')}"></label>
-              <label title="Only show developers with at most this many published apps — filters out giant app-farms">Apps count max<input name="f_appsMax" value="${esc(f.appsMax || '')}"></label>
-              <label title="Only show leads with Priority at or below this — filters out giants like Google/Samsung">Priority max<input name="f_prioMax" value="${esc(f.prioMax || '')}"></label>
-              <label title="Only show leads currently at this stage of the send sequence">Outreach status<select name="f_outreach">
-                <option value=""${!f.outreach ? ' selected' : ''}>Any</option>
-                ${OUTREACH_OPTS.filter(Boolean).map((o) => `<option value="${esc(o)}"${o === f.outreach ? ' selected' : ''}>${esc(o)}</option>`).join('')}
+
+        <div class="filters">
+          <form method="get" action="/" id="filterform">
+            <div class="bar">
+              <label class="search" title="Free-text search across Studio, App name, Category, and Email">
+                <input name="q" value="${esc(f.q)}" placeholder="Search studio, app, category, email…">
+              </label>
+              <label title="Quick presets: which leads to show based on their group/status">View:
+                <select name="view" onchange="this.form.submit()" title="Quick presets: which leads to show based on their group/status">
+                  ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['booked', 'Booked calls'], ['blocked', 'Blocked only']]
+                    .map(([v, l]) => `<option value="${v}"${view === v ? ' selected' : ''}>${l}</option>`).join('')}
+                </select>
+              </label>
+              <label title="Filter to only Android or only iOS leads">OS: <select name="platform" onchange="this.form.submit()" title="Filter to only Android or only iOS leads">
+                <option value=""${!f.platform ? ' selected' : ''}>All</option>
+                <option value="android"${f.platform === 'android' ? ' selected' : ''}>🤖 Android</option>
+                <option value="ios"${f.platform === 'ios' ? ' selected' : ''}>🍎 iOS</option>
               </select></label>
-              <label title="Only show leads with this Response status">Response status<select name="f_response">
-                <option value=""${!f.response ? ' selected' : ''}>Any</option>
-                ${RESPONSE_OPTS.filter(Boolean).map((o) => `<option value="${esc(o)}"${o === f.response ? ' selected' : ''}>${esc(o)}</option>`).join('')}
-              </select></label>
+              <button type="submit" title="Apply the search box + OS filter above">Apply filters</button>
+              <label title="Check/uncheck every row currently shown (respects the active filters)">
+                <input type="checkbox" data-selectall> Select all shown
+              </label>
+              <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
             </div>
-            <p><button type="submit" title="Apply all the column filters above">Apply filters</button></p>
-          </details>
-        </form>
-        <details class="crit" style="margin:.4rem 0">
-          <summary>ℹ️ What do these columns &amp; filters mean? (tap to open — works on phones too)</summary>
-          <div style="margin-top:.6rem;font-size:.85rem;line-height:1.7">
-            <b>Opp (Opportunity Score, 0–100):</b> how good an acquisition target this app is — high demand (rating, reviews, installs) combined with weak monetization (low/no revenue, no ads/IAP) and signs it's cheap to buy (solo dev, no website, few apps). Higher is better. This is what the list is sorted by.<br>
-            <b>Priority:</b> installs/day × total apps published by this developer. It is a raw "how big is this developer" number, used only as a tie-breaker after Opportunity — a high Priority is <i>not</i> a good sign by itself (Google/Samsung score millions here); use "Priority max" in filters to hide giants.<br>
-            <b>Total inst / Inst/day:</b> all-time installs of this specific app, and the developer's current daily install velocity (still-alive demand).<br>
-            <b>Rev/mo, $/inst:</b> the app's estimated monthly revenue, and revenue per install (low = weak monetization = upside).<br>
-            <b>💬 badge:</b> number of reviews found complaining about price/ads or offering to pay — open <b>👁 Preview</b> on that lead to read the actual quotes.<br>
-            <b>Site:</b> 🌐 is the studio's own website. It comes from Google Play when listed; otherwise it is inferred from the privacy-policy link or the email domain. A dash means we found nothing, which is itself a solo-dev signal (the score only counts a website Google Play actually listed).<br>
-            <b>Contact:</b> the person behind the app. <b>✅</b> means the name was read off the studio's own website and is reliable. <b>~</b> means it was split out of the email address (jane.doe@… → Jane Doe) and is a <i>guess</i> — never address someone by a ~ name without checking. Outreach emails deliberately keep using the studio name.<br>
-            <b>Phone:</b> a number the studio published <i>as</i> a phone number — a tap-to-call link or a "Phone:"/"Tel:" line on their own site, or the store listing's developer contact. Tap it to call. There is deliberately no digit-scraping fallback: a page is full of digit runs (company and VAT numbers, dates, postcodes), and a wrong number here means calling a stranger. A dash means they published none.<br>
-            <b>Country:</b> where the studio is based, from AppStoreSpy. Its job is to narrow down a common name on LinkedIn.<br>
-            <b>Response status:</b> "Respond" is set automatically on their first reply. Everything after that is set by
-            hand as the conversation moves: <b>Booked a call</b>, <b>Reviewing Data</b> (they gave us access and we are going
-            through their numbers), <b>Not Relevant</b>, or <b>No Response</b> (closed out after both follow-ups with silence).<br>
-            <b>The tiles at the top are clickable</b> — each one filters the table to exactly the leads it counted, and "← Back to all" clears it.<br>
-            <b>Contact coverage right now:</b> ${cov.total} lead${cov.total === 1 ? '' : 's'} —
-            ${cov.with_site} with a website, ${cov.with_name} with a contact name
-            (${cov.name_verified} of those verified from the studio site),
-            ${cov.with_linkedin} with a LinkedIn URL, ${cov.with_phone} with a phone, ${cov.with_country} with a country.
-            Check these numbers before paying for external enrichment: if the free steps already cover most leads, there is nothing to buy.<br>
-            <b>LinkedIn:</b> a <span style="color:#0A66C2;font-weight:600">blue</span> icon is a real link — a profile or company page the studio published on its own website, found while reading their site. A <span class="muted" style="font-weight:600">grey</span> icon means nothing was found there, and opens ready-made <i>searches</i> for this lead — by name + studio, by name + country, by app name (developers often list their own app in their profile), and by studio + role. Those are searches, not verified profiles: you pick the right person.<br>
-            <b>View:</b> quick presets (e.g. "Queue" = never contacted yet). <b>Search:</b> matches Studio/App/Category/Email. <b>OS:</b> Android vs iOS (only Android is sourced today).<br>
-            <b>More column filters:</b> set any combination of numeric ranges/statuses above and click Apply — they combine with View and Search.
-          </div>
-        </details>
+            <details class="crit" style="margin-top:.5rem"${advCount ? ' open' : ''}>
+              <summary>🎛 More column filters (Opportunity, Installs, Rating, Revenue, Apps, Priority, Outreach/Response)${advCount ? ` <span class="fcount">${advCount}</span>` : ''}</summary>
+              <div class="grid" style="margin-top:.6rem">
+                <label title="Only show leads with an Opportunity Score at or above this (0–100)">Opportunity min<input name="f_oppMin" value="${esc(f.oppMin || '')}"></label>
+                <label title="Only show leads with an Opportunity Score at or below this (0–100)">Opportunity max<input name="f_oppMax" value="${esc(f.oppMax || '')}"></label>
+                <label title="Only show apps with at least this many all-time installs">Total installs min<input name="f_instMin" value="${esc(f.instMin || '')}"></label>
+                <label title="Only show apps with at most this many all-time installs">Total installs max<input name="f_instMax" value="${esc(f.instMax || '')}"></label>
+                <label title="Only show apps rated at or above this (0–5)">Rating min<input name="f_ratingMin" value="${esc(f.ratingMin || '')}"></label>
+                <label title="Only show leads earning at most this much per month — filters out already well-monetized apps">Revenue/mo max ($)<input name="f_revMax" value="${esc(f.revMax || '')}"></label>
+                <label title="Only show developers with at least this many published apps">Apps count min<input name="f_appsMin" value="${esc(f.appsMin || '')}"></label>
+                <label title="Only show developers with at most this many published apps — filters out giant app-farms">Apps count max<input name="f_appsMax" value="${esc(f.appsMax || '')}"></label>
+                <label title="Only show leads with Priority at or below this — filters out giants like Google/Samsung">Priority max<input name="f_prioMax" value="${esc(f.prioMax || '')}"></label>
+                <label title="Only show leads currently at this stage of the send sequence">Outreach status<select name="f_outreach">
+                  <option value=""${!f.outreach ? ' selected' : ''}>Any</option>
+                  ${OUTREACH_OPTS.filter(Boolean).map((o) => `<option value="${esc(o)}"${o === f.outreach ? ' selected' : ''}>${esc(o)}</option>`).join('')}
+                </select></label>
+                <label title="Only show leads with this Response status">Response status<select name="f_response">
+                  <option value=""${!f.response ? ' selected' : ''}>Any</option>
+                  ${RESPONSE_OPTS.filter(Boolean).map((o) => `<option value="${esc(o)}"${o === f.response ? ' selected' : ''}>${esc(o)}</option>`).join('')}
+                </select></label>
+              </div>
+              <p><button type="submit" title="Apply all the column filters above">Apply filters</button></p>
+            </details>
+          </form>
+          ${anyFilterActive ? `<div class="chips">
+            ${activeChips.map((c) => `<span class="chip">${esc(c.label(qp[c.k]))} <a href="${esc(urlWith(c.k, null))}" title="Remove this filter">✕</a></span>`).join('')}
+            <a href="/" style="font-size:.78rem;font-weight:600" title="Remove every active filter and show the default view">Clear all</a>
+          </div>` : ''}
+        </div>
         <p class="legend wide-only">The <b>Studio</b> and <b>Actions</b> columns stay pinned; scroll the table sideways for status &amp; details.</p>
         <div class="cards">${cards || '<p class="muted">No leads yet — click "Source now".</p>'}</div>
         <div class="card wrap"><table>
@@ -1004,7 +1222,7 @@ function makeApp() {
           tick(); setInterval(tick,1000);
         })();
         </script>
-      `));
+      `, sidePanel, sideOpen, closeHref));
     } catch (e) {
       res.status(500).send('Error: ' + esc(e.message));
     }
@@ -1028,7 +1246,10 @@ function makeApp() {
   app.post('/bulk', async (req, res) => {
     let ids = req.body.ids || [];
     if (!Array.isArray(ids)) ids = [ids];
-    ids = ids.map(Number).filter(Boolean);
+    // Every lead's checkbox renders twice (mobile card + table row), so the
+    // same id arrives twice per ticked lead - dedupe or "3 selected" reports
+    // as "Blocked 6".
+    ids = [...new Set(ids.map(Number).filter(Boolean))];
     const action = req.body.action;
     let n = 0;
     try {
@@ -1687,7 +1908,10 @@ function makeApp() {
       req.body.enrichFromSite = req.body.enrichFromSite ? 'true' : 'false';
       await criteria.set(req.body || {});
     } catch (e) { console.error('[criteria]', e.message); }
-    res.redirect('/');
+    // Was always '/', which silently dropped the drawer + any active filter
+    // the moment you saved criteria. The form's hidden `back` field (set to
+    // this same view with ?panel=settings) is what keeps both in place.
+    res.redirect(backUrl(req));
   });
   app.post('/quota', async (req, res) => {
     try {

@@ -207,13 +207,18 @@ forward to it").
   the fact that they replied is not.
 - **`needsReply` (the row stripe, the tiles) and `bannerWaiting` (what the "waiting on you" banner
   actually shows) are two different lists on purpose.** `needsReply` stays mechanical everywhere
-  outside the banner. The banner is the one place allowed to lean on the AI: a lead is dropped from
-  `bannerWaiting` — not just muted — only when `ai_action_needed === 'no'` **and** `!awaitingUs`
-  (they have not written again since our last answer). That second condition is what keeps this
-  safe: someone who wrote again after we already replied is the strongest signal that they are still
-  engaged, so that lead stays, muted rather than gone, even if the AI thinks the message itself needs
-  nothing back. The dropped lead is still fully `needsReply` everywhere else — the row stripe, the
-  tiles, the main table — only the banner's own list narrows.
+  outside the banner. The banner is the one place allowed to lean on two things besides the raw
+  timestamps: (1) the AI's read — a lead is dropped from `bannerWaiting` when `ai_action_needed ===
+  'no'` **and** `!awaitingUs` (they have not written again since our last answer; that second
+  condition is what keeps this safe — someone who wrote again after we already replied is the
+  strongest signal that they are still engaged, so that lead stays, muted rather than gone, even if
+  the AI thinks the message itself needs nothing back); and (2) the operator's own hand-set
+  `response` status — `Booked a call` / `Reviewing Data` also drops a lead out of `bannerWaiting`
+  (`QUIET_RESPONSES` in `src/server.js`), because a status the operator set by hand outranks a
+  mechanical "their message is newer" test. Those quieted leads are not forgotten: they are counted
+  and surfaced as one muted line under the banner ("N more with a booked call / data review also
+  wrote"), linking to `?view=booked`. Every dropped lead is still fully `needsReply` everywhere else —
+  the row stripe, the tiles, the main table — only the banner's own list narrows.
 - When a lead does stay in the banner with `ai_action_needed === 'no'`, the bold "✍️ Draft a reply →"
   is replaced by a muted "✓ probably no reply needed" pill (the reason as its title) plus a small
   "Draft a reply anyway →" — softened, never silently gone.
@@ -433,9 +438,38 @@ same Gmail conversation.
 
 ### Dashboard
 
-`src/server.js` (~800 lines) is a single-file server-rendered dashboard — no client framework, HTML
+`src/server.js` (~2000 lines) is a single-file server-rendered dashboard — no client framework, HTML
 built as template strings, everything escaped through `esc()`. Basic-auth gated; `/health` is the
 only unauthenticated route. Filters are GET query params so views are shareable.
+
+- **Settings live in a slide-in drawer (`shell()`'s `side` param), not the page body.** The header
+  keeps only the three daily actions (Source now / Send tick / Check replies) plus a single
+  `⚙ Settings` link; DRY/LIVE, send mode, quota, API keys, search criteria, and the maintenance
+  tools (Duplicates, Audit, Reviews, Clear all, …) all moved into the drawer. The open/closed state
+  is `?panel=settings` on the URL, rendered server-side into `sideOpen` — that is deliberate, not
+  an oversight of "should just be client state": it is what lets a save inside the drawer (a key, a
+  quota, the criteria form) redirect back to the exact same view **with the drawer still open**,
+  because every form in the drawer carries a hidden `back` field built from `backPanel` (this view +
+  `panel=settings`). A small script (`setSide()` in `shell()`'s `<script>`) intercepts the
+  `⚙ Settings` link and the drawer's ✕/scrim (marked `data-side="open"` / `data-side="close"`) to
+  toggle instantly instead of round-tripping — but the plain links underneath still work with JS off.
+  **`POST /criteria` must redirect via `backUrl(req)`, never a bare `res.redirect('/')`** — that was
+  a real bug fixed alongside this: a bare `/` silently closed the drawer and dropped any active
+  filter the moment criteria were saved.
+- **Every applied filter renders as a removable chip, driven by one `CHIPS` list**, the same
+  one-source-of-truth pattern as `TILES`. `anyFilterActive` and the "N" badge on the collapsed
+  "More column filters" panel are both *derived* from `CHIPS.filter(...)`, not a second
+  hand-maintained boolean — the old code kept `anyFilterActive` as a 13-term `||` chain next to the
+  filter list, which is exactly how a newly added filter param silently never shows "Clear filters".
+  A chip's `×` uses `urlWith(k, null)`, which rebuilds the current `req.url` with only that one
+  param removed, so removing one filter never disturbs the others (or the settings drawer's own
+  `panel` param, which rides through the same helper).
+- **Bulk-action buttons (`⛔ Block selected` / `🗑 Delete selected`) stay `hidden` until a row is
+  ticked.** The count is computed client-side from `.rowchk:checked`, deduped by `value` — a lead's
+  checkbox renders **twice** (the mobile card and the desktop row), so a raw `querySelectorAll(...).
+  length` double-counts every selection. `POST /bulk` was fixed the same way server-side
+  (`[...new Set(ids)]`) for the same reason — it used to report blocking 2× the leads actually
+  selected.
 
 ## Conventions and gotchas
 
