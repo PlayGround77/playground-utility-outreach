@@ -492,6 +492,27 @@ only unauthenticated route. Filters are GET query params so views are shareable.
   length` double-counts every selection. `POST /bulk` was fixed the same way server-side
   (`[...new Set(ids)]`) for the same reason — it used to report blocking 2× the leads actually
   selected.
+- **`.grid select` needs the same `width:100%` rule as `.grid input`, or the filter grid stops
+  lining up.** An unstyled `<select>` sizes itself to its *widest `<option>`* (Category's
+  `MAPS_AND_NAVIGATION`, LinkedIn's `Verified (found on their site)`), not to its grid cell — so
+  without this rule some cells stay short and others overflow, and `repeat(auto-fit, minmax(...))`
+  can no longer keep everything in even rows. This was a real, visible bug, not a hypothetical.
+- **"📋 Copy table" reads the live `<table id="leadsTable">` in the DOM, not a re-fetch or a second
+  server-rendered export.** That is deliberate: whatever the current filters/search/sort produced on
+  screen is exactly what gets copied, with no separate "what should the export contain" logic to
+  keep in sync with the table itself. Per cell: a `<select>` (Outreach/Response) copies its
+  *selected option's text*, never the raw markup — `textContent` on a `<select>` concatenates every
+  option regardless of which is chosen, so that needs explicit handling. `<form>`/`<button>`
+  descendants (the row checkbox, Preview/Send/Block/Delete) are stripped from a clone before reading
+  `textContent`, so the Actions column copies as empty rather than button labels. Falls back to a
+  hidden-textarea + `execCommand('copy')` when `navigator.clipboard` is unavailable.
+- **Any backslash meant for the browser's own JS/regex, written inside `shell()`'s template
+  literal, must be doubled (`\\t`, `\\n`, `\\s`).** `shell()`'s return value is one big JS template
+  literal spanning the whole page including the inline `<script>` — Node processes its escape
+  sequences at *build* time, so a single `\t` there becomes an actual tab character in the emitted
+  HTML/JS, not the two characters `\`+`t`. A raw newline or tab landing inside what was meant to be a
+  browser-side single-quoted string breaks it (this is why `Claude\\'s` appears doubled in the reply
+  page's own script, for the same reason applied to an apostrophe instead of a regex).
 
 ## Conventions and gotchas
 

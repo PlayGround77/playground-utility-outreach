@@ -262,6 +262,12 @@ function shell(inner, side, sideOpen, closeHref) {
   .help{font-size:.75rem;color:var(--muted);display:block;margin-top:.15rem}
   input{font:inherit;padding:.4rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
   .grid input{width:100%;margin-top:.2rem}
+  /* Without this, a <select> sizes itself to its widest <option> (Category's
+     "MAPS_AND_NAVIGATION", LinkedIn's "Verified (found on their site)") -
+     some cells stay short, others overflow their column, and the grid stops
+     lining up into even rows. Match the input rule above so every control in
+     the grid is the same width as its cell, regardless of option text. */
+  .grid select{width:100%;margin-top:.2rem}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
   .wrap{overflow-x:auto}
   /* Card list for narrow screens - built from the same lead data and cell
@@ -551,6 +557,48 @@ ${side ? `<a class="scrim" id="sidescrim" href="${esc(closeHref)}" aria-label="C
       });
     });
     syncBulk();
+  }
+
+  // ---- copy the visible table as tab-separated text ----------------------
+  // Reads the real <table> in the DOM, not a re-fetch, so it always matches
+  // whatever filter/search/sort produced this exact page - no separate
+  // "what should I export" logic to keep in sync with the table itself.
+  var copyBtn = document.getElementById('copyTableBtn');
+  if(copyBtn){
+    copyBtn.addEventListener('click', function(){
+      var table = document.getElementById('leadsTable');
+      if(!table) return;
+      var orig = copyBtn.textContent;
+      var tsv = Array.prototype.map.call(table.querySelectorAll('tr'), function(tr){
+        return Array.prototype.map.call(tr.querySelectorAll('th,td'), function(cell){
+          // A <select> cell (Outreach/Response) carries every <option>'s text
+          // in textContent regardless of which is selected - only the chosen
+          // one is the actual data. Everything else that is a page control
+          // rather than a fact about the lead (the row checkbox, the
+          // Preview/Send/Block/Delete buttons and their forms) contributes no
+          // real text once removed, so no per-column special-casing is
+          // needed beyond selects.
+          var sel = cell.querySelector('select');
+          if(sel) return sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+          var clone = cell.cloneNode(true);
+          clone.querySelectorAll('form,button').forEach(function(n){ n.remove(); });
+          return clone.textContent.replace(/\\s+/g, ' ').trim();
+        }).join('\\t');
+      }).join('\\n');
+
+      function flash(text){ copyBtn.textContent = text; setTimeout(function(){ copyBtn.textContent = orig; }, 1500); }
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(tsv).then(function(){ flash('✅ Copied!'); }, function(){ flash('⚠️ Copy failed'); });
+        return;
+      }
+      // Fallback for browsers with no Clipboard API (or a non-HTTPS origin).
+      var ta = document.createElement('textarea');
+      ta.value = tsv; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); flash('✅ Copied!'); }
+      catch(e){ flash('⚠️ Copy failed'); }
+      document.body.removeChild(ta);
+    });
   }
 })();
 </script>
@@ -1239,6 +1287,7 @@ function makeApp() {
               <label title="Check/uncheck every row currently shown (respects the active filters)">
                 <input type="checkbox" data-selectall> Select all shown
               </label>
+              <button type="button" id="copyTableBtn" title="Copy every visible row and column (respecting the active filters, search and sort) as tab-separated text - paste directly into a spreadsheet">📋 Copy table</button>
               <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
             </div>
             <details class="crit" style="margin-top:.5rem"${advCount ? ' open' : ''}>
@@ -1302,7 +1351,7 @@ function makeApp() {
         </div>
         <p class="legend wide-only">The <b>Studio</b> and <b>Actions</b> columns stay pinned; scroll the table sideways for status &amp; details.</p>
         <div class="cards">${cards || '<p class="muted">No leads yet — click "Source now".</p>'}</div>
-        <div class="card wrap"><table>
+        <div class="card wrap"><table id="leadsTable">
           <thead><tr>
             ${th('name', 'Studio')}${th('app', 'App')}${th('os', 'OS', '🤖 Android or 🍎 iOS')}${th('opp', 'Opp', 'Acquisition Opportunity Score (0–100): demand × weak monetization × how cheap/easy to acquire. Sorted high to low by default.')}${th('category', 'Category')}
             ${th('instday', 'Inst/day', "Developer's current installs/day (install velocity)")}${th('insttotal', 'Total inst', "This app's all-time installs")}
