@@ -464,6 +464,28 @@ only unauthenticated route. Filters are GET query params so views are shareable.
   A chip's `×` uses `urlWith(k, null)`, which rebuilds the current `req.url` with only that one
   param removed, so removing one filter never disturbs the others (or the settings drawer's own
   `panel` param, which rides through the same helper).
+- **Filters cover every column, not just the numeric/status ones from the original design** —
+  Category (a `<select>` from `criteria.VALID_CATEGORIES`), Country and Group (substring match,
+  case-insensitive), Site/Phone (has one published or not), Contact name (`verified` = read off the
+  site, `guessed` = split from the email, `none`), and LinkedIn. **The LinkedIn filter's `verified`
+  vs `search` values are the whole point** — `verified` means `linkedin_url` is set (a profile the
+  studio published on its own site, the blue icon), `search` means nothing was found there (the grey
+  icon's ready-made searches). A filter that only checked "has *some* LinkedIn value" would conflate
+  those, defeating the reason the blue/grey distinction exists in the first place (see "The LinkedIn
+  column" above).
+- **Every column header is a sort link (`th(key, label, title)`), driven by one `SORT_FIELDS` map** —
+  same pattern as `TILES`/`CHIPS`: the header link and the comparator it triggers can never drift
+  apart because both come from the same key. Clicking toggles direction (`▲`/`▼` marks the active
+  column); sorting combines with whatever filters/search/view are already applied, via the same
+  `req.url`-rebuilding approach as `urlWith`. No sort param means the original DB order
+  (`opportunity DESC, priority DESC`) — sorting is additive, not a replacement default.
+- **The "LI Link" column is deliberately separate from the "LinkedIn" (find-person) column.** The
+  existing column is a compact icon — blue when a profile was found on the studio's own site, grey
+  when it only opens search suggestions — but an icon cannot be scanned down a column or copied. "LI
+  Link" (`linkedinLinkCell()`) shows the actual verified URL as text, and is blank (not a search
+  prompt) whenever nothing was verified — this column is only ever the certain case, mirroring the
+  rule that guessed names and unverified links never get dressed up as something more solid than
+  they are.
 - **Bulk-action buttons (`⛔ Block selected` / `🗑 Delete selected`) stay `hidden` until a row is
   ticked.** The count is computed client-side from `.rowchk:checked`, deduped by `value` — a lead's
   checkbox renders **twice** (the mobile card and the desktop row), so a raw `querySelectorAll(...).

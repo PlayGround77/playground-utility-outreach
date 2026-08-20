@@ -161,6 +161,16 @@ function findPersonCell(l) {
       >${liIcon(16)}<span class="li-n">${searches.length}</span></summary><div class="findbox">${links}</div></details>`;
 }
 
+// The verified URL itself, spelled out - findPersonCell's blue icon links to
+// the same profile, but as an icon it cannot be read at a glance or scanned
+// down a column. Blank (not a search prompt) when nothing was found: this
+// column is only ever the certain case, never the guess.
+function linkedinLinkCell(l) {
+  if (!l.linkedin_url) return '<span class="muted">—</span>';
+  const label = l.linkedin_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '');
+  return `<a href="${esc(l.linkedin_url)}" target="_blank" rel="noopener" title="${esc(l.linkedin_url)}">${esc(label)}</a>`;
+}
+
 /* ---- status option lists + colors ---- */
 const OUTREACH_OPTS = ['', 'Email Sent', 'Follow-up 1 Sent', 'Follow-up 2 Sent', 'Sequence Closed'];
 const RESPONSE_OPTS = ['', 'Respond', 'Booked a call', 'Reviewing Data', 'Not Relevant', 'No Response'];
@@ -666,10 +676,21 @@ function makeApp() {
         response: qp.f_response || '',
         oppMin: qp.f_oppMin, oppMax: qp.f_oppMax,
         instMin: qp.f_instMin, instMax: qp.f_instMax,
+        instDayMin: qp.f_instDayMin, instDayMax: qp.f_instDayMax,
         ratingMin: qp.f_ratingMin,
-        revMax: qp.f_revMax,
+        revMax: qp.f_revMax, rpiMax: qp.f_rpiMax,
         appsMin: qp.f_appsMin, appsMax: qp.f_appsMax,
-        prioMax: qp.f_prioMax
+        prioMax: qp.f_prioMax,
+        category: qp.f_category || '',
+        country: (qp.f_country || '').trim().toLowerCase(),
+        group: (qp.f_group || '').trim().toLowerCase(),
+        site: qp.f_site || '',
+        contact: qp.f_contact || '',
+        phone: qp.f_phone || '',
+        // The important one: a blue LinkedIn icon (found on the studio's own
+        // site) is a real link; a grey one only opens search suggestions.
+        // Filtering must respect that distinction, not just "has a value".
+        linkedin: qp.f_linkedin || ''
       };
       // One list drives the chip row, the "N active" badge and whether any
       // filter is on at all - the same reason TILES owns both its count and
@@ -685,11 +706,23 @@ function makeApp() {
         { k: 'f_oppMax', adv: true, label: (v) => `Opp ≤ ${v}` },
         { k: 'f_instMin', adv: true, label: (v) => `Installs ≥ ${num(v)}` },
         { k: 'f_instMax', adv: true, label: (v) => `Installs ≤ ${num(v)}` },
+        { k: 'f_instDayMin', adv: true, label: (v) => `Inst/day ≥ ${num(v)}` },
+        { k: 'f_instDayMax', adv: true, label: (v) => `Inst/day ≤ ${num(v)}` },
         { k: 'f_ratingMin', adv: true, label: (v) => `★ ≥ ${v}` },
         { k: 'f_revMax', adv: true, label: (v) => `Rev/mo ≤ $${num(v)}` },
+        { k: 'f_rpiMax', adv: true, label: (v) => `$/inst ≤ $${v}` },
         { k: 'f_appsMin', adv: true, label: (v) => `Apps ≥ ${v}` },
         { k: 'f_appsMax', adv: true, label: (v) => `Apps ≤ ${v}` },
-        { k: 'f_prioMax', adv: true, label: (v) => `Priority ≤ ${num(v)}` }
+        { k: 'f_prioMax', adv: true, label: (v) => `Priority ≤ ${num(v)}` },
+        { k: 'f_category', adv: true, label: (v) => `Category: ${v}` },
+        { k: 'f_country', adv: true, label: (v) => `Country: ${v}` },
+        { k: 'f_group', adv: true, label: (v) => `Group: ${v}` },
+        { k: 'f_site', adv: true, label: (v) => (v === 'yes' ? 'Has website' : 'No website') },
+        { k: 'f_contact', adv: true,
+          label: (v) => ({ verified: 'Contact: verified', guessed: 'Contact: guessed', none: 'Contact: none' }[v] || v) },
+        { k: 'f_phone', adv: true, label: (v) => (v === 'yes' ? 'Has phone' : 'No phone') },
+        { k: 'f_linkedin', adv: true,
+          label: (v) => (v === 'verified' ? '🔗 LinkedIn verified' : 'LinkedIn: search only') }
       ];
       const activeChips = CHIPS.filter((c) => String(qp[c.k] || '').trim() !== '');
       const anyFilterActive = activeChips.length > 0;
@@ -729,9 +762,91 @@ function makeApp() {
           if (appsMax !== null && Number(l.apps_count) > appsMax) return false;
           const prioMax = num2(f.prioMax);
           if (prioMax !== null && Number(l.priority) > prioMax) return false;
+          const instDayMin = num2(f.instDayMin), instDayMax = num2(f.instDayMax);
+          if (instDayMin !== null && Number(l.installs_day) < instDayMin) return false;
+          if (instDayMax !== null && Number(l.installs_day) > instDayMax) return false;
+          const rpiMax = num2(f.rpiMax);
+          if (rpiMax !== null && Number(l.rev_per_install) > rpiMax) return false;
+          if (f.category && l.category !== f.category) return false;
+          if (f.country && !String(l.country || '').toLowerCase().includes(f.country)) return false;
+          if (f.group && !String(l.grp || '').toLowerCase().includes(f.group)) return false;
+          if (f.site === 'yes' && !String(l.website || '').trim()) return false;
+          if (f.site === 'no' && String(l.website || '').trim()) return false;
+          if (f.phone === 'yes' && !String(l.phone || '').trim()) return false;
+          if (f.phone === 'no' && String(l.phone || '').trim()) return false;
+          // 'verified' = read off the studio's own site (contactCell's ✅);
+          // 'guessed' = split from the email address (contactCell's ~).
+          if (f.contact === 'verified' && l.contact_name_source !== 'site') return false;
+          if (f.contact === 'guessed' && !(String(l.contact_name || '').trim() && l.contact_name_source !== 'site')) return false;
+          if (f.contact === 'none' && String(l.contact_name || '').trim()) return false;
+          // 'verified' = a profile the studio published on its own site
+          // (blue icon, a real link); 'search' = nothing found, only the
+          // ready-made search suggestions (grey icon) - never treat those two
+          // as the same "has LinkedIn" bucket.
+          if (f.linkedin === 'verified' && !String(l.linkedin_url || '').trim()) return false;
+          if (f.linkedin === 'search' && String(l.linkedin_url || '').trim()) return false;
           return true;
         });
       }
+
+      // Column sort. One list of getters, the same one-source-of-truth
+      // pattern as TILES/CHIPS, so a header link and its comparator can
+      // never drift apart. Text columns compare case-insensitively; numeric
+      // columns compare as numbers so "10" does not sort before "9".
+      const SORT_FIELDS = {
+        name: { text: (l) => l.name || '' },
+        app: { text: (l) => l.top_app || l.name || '' },
+        os: { text: (l) => l.platform || '' },
+        opp: { num: (l) => Number(l.opportunity) || 0 },
+        category: { text: (l) => l.category || '' },
+        instday: { num: (l) => Number(l.installs_day) || 0 },
+        insttotal: { num: (l) => Number(l.installs_total) || 0 },
+        apps: { num: (l) => Number(l.apps_count) || 0 },
+        rev: { num: (l) => Number(l.revenue_month) || 0 },
+        rpi: { num: (l) => Number(l.rev_per_install) || 0 },
+        rating: { num: (l) => Number(l.rating_avg) || 0 },
+        priority: { num: (l) => Number(l.priority) || 0 },
+        email: { text: (l) => l.email || '' },
+        site: { num: (l) => (String(l.website || '').trim() ? 1 : 0) },
+        contact: { text: (l) => l.contact_name || '' },
+        phone: { text: (l) => l.phone || '' },
+        country: { text: (l) => l.country || '' },
+        // Verified links first (or last, reversed) - not alphabetical by URL,
+        // which would just interleave with the unverified rows.
+        linkedin: { num: (l) => (String(l.linkedin_url || '').trim() ? 1 : 0) },
+        outreach: { text: (l) => l.outreach || '' },
+        response: { text: (l) => l.response || '' },
+        group: { text: (l) => l.grp || '' }
+      };
+      const sortKey = Object.prototype.hasOwnProperty.call(SORT_FIELDS, qp.sort || '') ? qp.sort : '';
+      const sortDir = qp.dir === 'asc' ? 'asc' : 'desc';
+      if (sortKey) {
+        const field = SORT_FIELDS[sortKey];
+        const get = field.num || field.text;
+        const isNum = !!field.num;
+        shown = shown.slice().sort((a, b) => {
+          const av = get(a), bv = get(b);
+          const cmp = isNum ? av - bv : String(av).toLowerCase().localeCompare(String(bv).toLowerCase());
+          return sortDir === 'asc' ? cmp : -cmp;
+        });
+      }
+      // Same url, sort set to this column - toggling direction if it is
+      // already the active column, defaulting to desc (highest/most-recent
+      // first) otherwise. Everything else applied (filters, view, panel)
+      // survives, same as urlWith.
+      const sortHref = (key) => {
+        const nextDir = sortKey === key && sortDir === 'desc' ? 'asc' : 'desc';
+        const p = new URLSearchParams(req.url.split('?')[1] || '');
+        p.set('sort', key); p.set('dir', nextDir);
+        const s = p.toString();
+        return '/' + (s ? '?' + s : '');
+      };
+      const th = (key, label, title) => `<th${title ? ` title="${esc(title)}"` : ''}>
+        <a href="${esc(sortHref(key))}" style="color:inherit;text-decoration:none;white-space:nowrap">${esc(label)}${sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}</a></th>`;
+      // Keep in sync with the <thead> below - it is hand-written, not built
+      // from this count, because each cell's markup (sortable vs plain,
+      // tooltip text) differs too much to make an array worth it here.
+      const COLUMN_COUNT = 25;
 
       const appCell = (l) => l.store_link
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
@@ -789,6 +904,7 @@ function makeApp() {
         <td class="ell">${phoneCell(l)}</td>
         <td class="muted">${esc(l.country)}</td>
         <td>${findPersonCell(l)}</td>
+        <td class="ell">${linkedinLinkCell(l)}</td>
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach, backHere)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response, backHere)}</td>
         <td class="ell" title="${esc(l.reply_snippet)}">${replyCell(l)}</td>
@@ -1013,6 +1129,8 @@ function makeApp() {
             about that lead — the conversation is already moving. It still shows the red NEEDS REPLY stripe in the list.<br>
             <b>The tiles at the top are clickable</b> — each one filters the table to exactly the leads it counted, and "← Back to all" clears it.<br>
             <b>Filter chips:</b> every filter you apply appears as a chip under the search box — click its × to remove just that one.<br>
+            <b>Sorting:</b> click any column header to sort by it (▲/▼ shows the active one and direction); click again to flip direction. This combines with whatever filters and search are already applied.<br>
+            <b>LI Link:</b> the verified LinkedIn URL itself, spelled out - only filled in when one was actually found on the studio's own site (same case as the blue LinkedIn icon). Use "LinkedIn: Verified" in More column filters to list only those.<br>
             <b>Contact coverage right now:</b> ${cov.total} lead${cov.total === 1 ? '' : 's'} —
             ${cov.with_site} with a website, ${cov.with_name} with a contact name
             (${cov.name_verified} of those verified from the studio site),
@@ -1124,7 +1242,7 @@ function makeApp() {
               <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
             </div>
             <details class="crit" style="margin-top:.5rem"${advCount ? ' open' : ''}>
-              <summary>🎛 More column filters (Opportunity, Installs, Rating, Revenue, Apps, Priority, Outreach/Response)${advCount ? ` <span class="fcount">${advCount}</span>` : ''}</summary>
+              <summary>🎛 More column filters (Opportunity, Installs, Rating, Revenue, Apps, Priority, Category, Country, Site, Contact, Phone, LinkedIn, Outreach/Response)${advCount ? ` <span class="fcount">${advCount}</span>` : ''}</summary>
               <div class="grid" style="margin-top:.6rem">
                 <label title="Only show leads with an Opportunity Score at or above this (0–100)">Opportunity min<input name="f_oppMin" value="${esc(f.oppMin || '')}"></label>
                 <label title="Only show leads with an Opportunity Score at or below this (0–100)">Opportunity max<input name="f_oppMax" value="${esc(f.oppMax || '')}"></label>
@@ -1143,6 +1261,36 @@ function makeApp() {
                   <option value=""${!f.response ? ' selected' : ''}>Any</option>
                   ${RESPONSE_OPTS.filter(Boolean).map((o) => `<option value="${esc(o)}"${o === f.response ? ' selected' : ''}>${esc(o)}</option>`).join('')}
                 </select></label>
+                <label title="Only show apps with at least this many installs/day (current velocity, not all-time)">Inst/day min<input name="f_instDayMin" value="${esc(f.instDayMin || '')}"></label>
+                <label title="Only show apps with at most this many installs/day">Inst/day max<input name="f_instDayMax" value="${esc(f.instDayMax || '')}"></label>
+                <label title="Only show leads earning at most this much revenue per install — low means weak monetization (upside for acquisition)">$/inst max<input name="f_rpiMax" value="${esc(f.rpiMax || '')}"></label>
+                <label title="Only show leads in this Google Play category">Category<select name="f_category">
+                  <option value=""${!f.category ? ' selected' : ''}>Any</option>
+                  ${criteria.VALID_CATEGORIES.map((c) => `<option value="${esc(c)}"${c === f.category ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+                </select></label>
+                <label title="Only show leads whose Country contains this text (case-insensitive)">Country contains<input name="f_country" value="${esc(f.country || '')}" placeholder="e.g. Germany"></label>
+                <label title="Only show leads whose Group contains this text — Group is the internal send-cohort tag, not a status">Group contains<input name="f_group" value="${esc(f.group || '')}"></label>
+                <label title="Only show leads that do/do not have a website listed">Website<select name="f_site">
+                  <option value=""${!f.site ? ' selected' : ''}>Any</option>
+                  <option value="yes"${f.site === 'yes' ? ' selected' : ''}>Has website</option>
+                  <option value="no"${f.site === 'no' ? ' selected' : ''}>No website</option>
+                </select></label>
+                <label title="Only show leads that do/do not have a phone number published">Phone<select name="f_phone">
+                  <option value=""${!f.phone ? ' selected' : ''}>Any</option>
+                  <option value="yes"${f.phone === 'yes' ? ' selected' : ''}>Has phone</option>
+                  <option value="no"${f.phone === 'no' ? ' selected' : ''}>No phone</option>
+                </select></label>
+                <label title="✅ verified = read off the studio's own site. ~ guessed = split from the email address. Filter separates the two, same as the Contact column's marks.">Contact name<select name="f_contact">
+                  <option value=""${!f.contact ? ' selected' : ''}>Any</option>
+                  <option value="verified"${f.contact === 'verified' ? ' selected' : ''}>✅ Verified (from site)</option>
+                  <option value="guessed"${f.contact === 'guessed' ? ' selected' : ''}>~ Guessed (from email)</option>
+                  <option value="none"${f.contact === 'none' ? ' selected' : ''}>None found</option>
+                </select></label>
+                <label title="A blue LinkedIn icon (Verified) is a profile the studio published on its own site — a real link. A grey one (Search only) means nothing was found, only ready-made search suggestions.">LinkedIn<select name="f_linkedin">
+                  <option value=""${!f.linkedin ? ' selected' : ''}>Any</option>
+                  <option value="verified"${f.linkedin === 'verified' ? ' selected' : ''}>🔗 Verified (found on their site)</option>
+                  <option value="search"${f.linkedin === 'search' ? ' selected' : ''}>Search only (not found)</option>
+                </select></label>
               </div>
               <p><button type="submit" title="Apply all the column filters above">Apply filters</button></p>
             </details>
@@ -1156,19 +1304,20 @@ function makeApp() {
         <div class="cards">${cards || '<p class="muted">No leads yet — click "Source now".</p>'}</div>
         <div class="card wrap"><table>
           <thead><tr>
-            <th>Studio</th><th>App</th><th title="🤖 Android or 🍎 iOS">OS</th><th title="Acquisition Opportunity Score (0–100): demand × weak monetization × how cheap/easy to acquire. Sorted high to low.">Opp</th><th>Category</th>
-            <th title="Developer's current installs/day (install velocity)">Inst/day</th><th title="This app's all-time installs">Total inst</th>
-            <th title="Number of apps this developer has published">Apps</th><th title="This app's estimated revenue per month">Rev/mo</th><th title="Revenue per install — low means weak monetization (upside for acquisition)">$/inst</th>
-            <th title="This app's Google Play rating (0–5) and number of ratings">Rating</th>
-            <th title="Installs/day × total apps for this developer. A raw 'how big' number, NOT a quality signal — Google/Samsung score in the billions here. Used only to break ties after Opportunity; filter it out with 'Priority max'.">Priority</th>
-            <th>Email</th><th>Store</th><th title="The studio's own website, when Google Play lists one. Blank is itself a signal — solo devs often have none.">Site</th>
-            <th title="The person behind the app. ✅ was read off the studio's own site; ~ was guessed from the email address and is unverified.">Contact</th>
-            <th title="A phone number the studio published itself - a tap-to-call link or a Phone: line on their site, or the store's developer contact. Tap it to call. Nothing is guessed from digits on a page.">Phone</th>
-            <th title="Where the studio is based (AppStoreSpy hq_country). Narrows down a common name on LinkedIn.">Country</th>
-            <th title="A blue LinkedIn icon is a profile the studio published on its own website — a real link. A grey one opens ready-made searches instead, because nothing was found: those are searches, not verified profiles.">LinkedIn</th>
-            <th>Outreach status</th><th>Response status</th><th title="What the lead actually wrote back (hover for more, or open the thread in Gmail)">Reply</th><th>Group</th><th></th>
+            ${th('name', 'Studio')}${th('app', 'App')}${th('os', 'OS', '🤖 Android or 🍎 iOS')}${th('opp', 'Opp', 'Acquisition Opportunity Score (0–100): demand × weak monetization × how cheap/easy to acquire. Sorted high to low by default.')}${th('category', 'Category')}
+            ${th('instday', 'Inst/day', "Developer's current installs/day (install velocity)")}${th('insttotal', 'Total inst', "This app's all-time installs")}
+            ${th('apps', 'Apps', 'Number of apps this developer has published')}${th('rev', 'Rev/mo', "This app's estimated revenue per month")}${th('rpi', '$/inst', 'Revenue per install — low means weak monetization (upside for acquisition)')}
+            ${th('rating', 'Rating', "This app's Google Play rating (0–5) and number of ratings")}
+            ${th('priority', 'Priority', "Installs/day × total apps for this developer. A raw 'how big' number, NOT a quality signal — Google/Samsung score in the billions here. Used only to break ties after Opportunity; filter it out with 'Priority max'.")}
+            ${th('email', 'Email')}<th>Store</th>${th('site', 'Site', "The studio's own website, when Google Play lists one. Blank is itself a signal — solo devs often have none.")}
+            ${th('contact', 'Contact', "The person behind the app. ✅ was read off the studio's own site; ~ was guessed from the email address and is unverified.")}
+            ${th('phone', 'Phone', "A phone number the studio published itself - a tap-to-call link or a Phone: line on their site, or the store's developer contact. Tap it to call. Nothing is guessed from digits on a page.")}
+            ${th('country', 'Country', 'Where the studio is based (AppStoreSpy hq_country). Narrows down a common name on LinkedIn.')}
+            ${th('linkedin', 'LinkedIn', 'A blue LinkedIn icon is a profile the studio published on its own website — a real link. A grey one opens ready-made searches instead, because nothing was found: those are searches, not verified profiles.')}
+            ${th('linkedin', 'LI Link', "The verified LinkedIn URL itself, when one was found on the studio's own site - the same profile as the LinkedIn column, shown as a link you can open or copy directly. Blank means nothing was found there yet.")}
+            ${th('outreach', 'Outreach status')}${th('response', 'Response status')}<th title="What the lead actually wrote back (hover for more, or open the thread in Gmail)">Reply</th>${th('group', 'Group')}<th></th>
           </tr></thead>
-          <tbody>${rows || '<tr><td colspan="21" class="muted">No leads yet — click “Source now”.</td></tr>'}</tbody>
+          <tbody>${rows || `<tr><td colspan="${COLUMN_COUNT}" class="muted">No leads yet — click “Source now”.</td></tr>`}</tbody>
         </table></div>
 
         <p class="legend">
