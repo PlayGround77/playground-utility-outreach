@@ -536,68 +536,128 @@ ${side ? `<a class="scrim" id="sidescrim" href="${esc(closeHref)}" aria-label="C
   // A lead renders its checkbox twice (mobile card + table row), so count
   // distinct values - a raw length double-reports every selection.
   var bulkbar = document.querySelector('.bulkbar');
+  var syncBulk = function(){};
   if(bulkbar){
     var out = bulkbar.querySelector('.bulkcount');
-    function syncBulk(){
+    syncBulk = function(){
       var seen = {}, n = 0;
       document.querySelectorAll('.rowchk:checked').forEach(function(c){
         if(!seen[c.value]){ seen[c.value] = 1; n++; }
       });
       bulkbar.hidden = n === 0;
       if(out) out.textContent = n + (n === 1 ? ' lead selected' : ' leads selected');
-    }
+    };
     document.addEventListener('change', function(e){
       if(e.target && e.target.classList && e.target.classList.contains('rowchk')) syncBulk();
     });
-    // "Select all shown" ticks boxes from script, which fires no change event.
-    document.querySelectorAll('[data-selectall]').forEach(function(box){
-      box.addEventListener('click', function(){
-        document.querySelectorAll('.rowchk').forEach(function(c){ c.checked = box.checked; });
-        syncBulk();
-      });
-    });
     syncBulk();
   }
+  // Two explicit buttons rather than one checkbox - ticking every row shown
+  // with a single click is the point, and "select all" reads as an action,
+  // not a state to toggle. Both tick/untick every .rowchk in one pass (a
+  // lead's checkbox renders twice - mobile card and desktop row - so both
+  // copies of it move together).
+  document.querySelectorAll('[data-selectall]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var on = btn.getAttribute('data-selectall') === '1';
+      document.querySelectorAll('.rowchk').forEach(function(c){ c.checked = on; });
+      syncBulk();
+    });
+  });
 
-  // ---- copy the visible table as tab-separated text ----------------------
+  // ---- reading the table for copy / export --------------------------------
+  // Shared by both Copy table and Export to Excel, so they can never disagree
+  // about what a cell's real value is. Selecting one or more rows scopes
+  // either action to just those leads; with nothing ticked, both act on
+  // every row currently shown (respecting the active filter/search/sort) -
+  // "mark one, mark all, or mark nothing" are all valid starting points.
+  function cellText(cell){
+    // A <select> cell (Outreach/Response) carries every <option>'s text in
+    // textContent regardless of which is selected - only the chosen one is
+    // the actual data.
+    var sel = cell.querySelector('select');
+    if(sel) return sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+    // Everything else that is a page control rather than a fact about the
+    // lead (the row checkbox, the Preview/Send/Block/Delete buttons and
+    // their forms) contributes no text once removed.
+    var clone = cell.cloneNode(true);
+    clone.querySelectorAll('form,button').forEach(function(n){ n.remove(); });
+    return clone.textContent.replace(/\\s+/g, ' ').trim();
+  }
+  function getTableRows(){
+    var table = document.getElementById('leadsTable');
+    if(!table) return null;
+    var head = table.querySelector('thead tr');
+    // The empty-table state is one placeholder <tr><td colspan> - "No leads
+    // yet", not a row of data. A rowchk-less row is never a real lead.
+    var body = Array.prototype.slice.call(table.querySelectorAll('tbody tr'))
+      .filter(function(tr){ return tr.querySelector('.rowchk'); });
+    var checkedIds = {};
+    document.querySelectorAll('.rowchk:checked').forEach(function(c){ checkedIds[c.value] = 1; });
+    var anySelected = Object.keys(checkedIds).length > 0;
+    if(anySelected){
+      body = body.filter(function(tr){
+        var chk = tr.querySelector('.rowchk');
+        return chk && checkedIds[chk.value];
+      });
+    }
+    var rows = (head ? [head] : []).concat(body);
+    return { cells: rows.map(function(tr){ return Array.prototype.map.call(tr.querySelectorAll('th,td'), cellText); }),
+      count: body.length, scoped: anySelected };
+  }
+  function flashButton(btn, text){
+    var orig = btn.getAttribute('data-label') || btn.textContent;
+    btn.setAttribute('data-label', orig);
+    btn.textContent = text;
+    setTimeout(function(){ btn.textContent = orig; }, 1500);
+  }
+
+  // ---- copy the table (selected rows, or every shown row) as TSV ---------
   // Reads the real <table> in the DOM, not a re-fetch, so it always matches
   // whatever filter/search/sort produced this exact page - no separate
   // "what should I export" logic to keep in sync with the table itself.
   var copyBtn = document.getElementById('copyTableBtn');
   if(copyBtn){
     copyBtn.addEventListener('click', function(){
-      var table = document.getElementById('leadsTable');
-      if(!table) return;
-      var orig = copyBtn.textContent;
-      var tsv = Array.prototype.map.call(table.querySelectorAll('tr'), function(tr){
-        return Array.prototype.map.call(tr.querySelectorAll('th,td'), function(cell){
-          // A <select> cell (Outreach/Response) carries every <option>'s text
-          // in textContent regardless of which is selected - only the chosen
-          // one is the actual data. Everything else that is a page control
-          // rather than a fact about the lead (the row checkbox, the
-          // Preview/Send/Block/Delete buttons and their forms) contributes no
-          // real text once removed, so no per-column special-casing is
-          // needed beyond selects.
-          var sel = cell.querySelector('select');
-          if(sel) return sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
-          var clone = cell.cloneNode(true);
-          clone.querySelectorAll('form,button').forEach(function(n){ n.remove(); });
-          return clone.textContent.replace(/\\s+/g, ' ').trim();
-        }).join('\\t');
-      }).join('\\n');
-
-      function flash(text){ copyBtn.textContent = text; setTimeout(function(){ copyBtn.textContent = orig; }, 1500); }
+      var data = getTableRows();
+      if(!data || !data.count){ flashButton(copyBtn, '⚠️ Nothing to copy'); return; }
+      var tsv = data.cells.map(function(row){ return row.join('\\t'); }).join('\\n');
+      var label = '✅ Copied ' + data.count + (data.count === 1 ? ' row!' : ' rows!');
       if(navigator.clipboard && navigator.clipboard.writeText){
-        navigator.clipboard.writeText(tsv).then(function(){ flash('✅ Copied!'); }, function(){ flash('⚠️ Copy failed'); });
+        navigator.clipboard.writeText(tsv).then(function(){ flashButton(copyBtn, label); }, function(){ flashButton(copyBtn, '⚠️ Copy failed'); });
         return;
       }
       // Fallback for browsers with no Clipboard API (or a non-HTTPS origin).
       var ta = document.createElement('textarea');
       ta.value = tsv; ta.style.position = 'fixed'; ta.style.left = '-9999px';
       document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); flash('✅ Copied!'); }
-      catch(e){ flash('⚠️ Copy failed'); }
+      try { document.execCommand('copy'); flashButton(copyBtn, label); }
+      catch(e){ flashButton(copyBtn, '⚠️ Copy failed'); }
       document.body.removeChild(ta);
+    });
+  }
+
+  // ---- export the table (selected rows, or every shown row) as a .csv ----
+  var exportBtn = document.getElementById('exportTableBtn');
+  if(exportBtn){
+    exportBtn.addEventListener('click', function(){
+      var data = getTableRows();
+      if(!data || !data.count){ flashButton(exportBtn, '⚠️ Nothing to export'); return; }
+      var csv = data.cells.map(function(row){
+        return row.map(function(v){
+          return /[",\\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+        }).join(',');
+      }).join('\\r\\n');
+      // A UTF-8 BOM so Excel reads non-ASCII text (Hebrew, emoji, ×) correctly
+      // instead of mangling it - Excel's CSV auto-detection needs the hint.
+      var blob = new Blob(['\\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      var stamp = new Date().toISOString().slice(0, 10);
+      a.href = url; a.download = 'leads-' + stamp + '.csv';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      flashButton(exportBtn, '✅ Exported ' + data.count + (data.count === 1 ? ' row!' : ' rows!'));
     });
   }
 })();
@@ -1284,10 +1344,12 @@ function makeApp() {
                 <option value="ios"${f.platform === 'ios' ? ' selected' : ''}>🍎 iOS</option>
               </select></label>
               <button type="submit" title="Apply the search box + OS filter above">Apply filters</button>
-              <label title="Check/uncheck every row currently shown (respects the active filters)">
-                <input type="checkbox" data-selectall> Select all shown
-              </label>
-              <button type="button" id="copyTableBtn" title="Copy every visible row and column (respecting the active filters, search and sort) as tab-separated text - paste directly into a spreadsheet">📋 Copy table</button>
+              <span class="seg">
+                <button type="button" data-selectall="1" title="Tick every row currently shown (respects the active filters) - one click, not one at a time">☑️ Select all shown</button>
+                <button type="button" data-selectall="0" title="Untick every row">☐ Clear selection</button>
+              </span>
+              <button type="button" id="copyTableBtn" title="Copy the ticked rows, or every visible row if none are ticked, as tab-separated text - paste directly into a spreadsheet">📋 Copy table</button>
+              <button type="button" id="exportTableBtn" title="Download the ticked rows, or every visible row if none are ticked, as a .csv file - opens straight into Excel">⬇️ Export to Excel</button>
               <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
             </div>
             <details class="crit" style="margin-top:.5rem"${advCount ? ' open' : ''}>

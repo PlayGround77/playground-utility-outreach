@@ -497,15 +497,29 @@ only unauthenticated route. Filters are GET query params so views are shareable.
   `MAPS_AND_NAVIGATION`, LinkedIn's `Verified (found on their site)`), not to its grid cell — so
   without this rule some cells stay short and others overflow, and `repeat(auto-fit, minmax(...))`
   can no longer keep everything in even rows. This was a real, visible bug, not a hypothetical.
-- **"📋 Copy table" reads the live `<table id="leadsTable">` in the DOM, not a re-fetch or a second
-  server-rendered export.** That is deliberate: whatever the current filters/search/sort produced on
-  screen is exactly what gets copied, with no separate "what should the export contain" logic to
-  keep in sync with the table itself. Per cell: a `<select>` (Outreach/Response) copies its
-  *selected option's text*, never the raw markup — `textContent` on a `<select>` concatenates every
-  option regardless of which is chosen, so that needs explicit handling. `<form>`/`<button>`
-  descendants (the row checkbox, Preview/Send/Block/Delete) are stripped from a clone before reading
-  `textContent`, so the Actions column copies as empty rather than button labels. Falls back to a
-  hidden-textarea + `execCommand('copy')` when `navigator.clipboard` is unavailable.
+- **"📋 Copy table" and "⬇️ Export to Excel" share one `getTableRows()`** that reads the live
+  `<table id="leadsTable">` in the DOM, not a re-fetch or a second server-rendered export. That is
+  deliberate: whatever the current filters/search/sort produced on screen is exactly what gets
+  copied or downloaded, with no separate "what should the export contain" logic for either action to
+  drift out of sync with the table itself or with each other. Per cell: a `<select>`
+  (Outreach/Response) copies its *selected option's text*, never the raw markup — `textContent` on a
+  `<select>` concatenates every option regardless of which is chosen, so that needs explicit
+  handling. `<form>`/`<button>` descendants (the row checkbox, Preview/Send/Block/Delete) are
+  stripped from a clone before reading `textContent`, so the Actions column copies as empty rather
+  than button labels. Copy falls back to a hidden-textarea + `execCommand('copy')` when
+  `navigator.clipboard` is unavailable; Export builds a `Blob` + a throwaway `<a download>`, with a
+  leading UTF-8 BOM so Excel reads non-ASCII text correctly instead of mangling it.
+- **Both actions are selection-scoped: ticked rows only, or every shown row if none are ticked.**
+  `getTableRows()` treats "nothing ticked" as "act on everything" rather than "act on nothing" -
+  the common case (export the current filtered view) needs no selection step at all, while marking
+  specific leads first narrows either action to just those. `tbody tr` without a `.rowchk` (the
+  "No leads yet" placeholder row) is filtered out before counting, so an empty table copies/exports
+  nothing instead of a one-row blob containing just that placeholder text.
+- **"☑️ Select all shown" / "☐ Clear selection" are two explicit buttons, not one checkbox that
+  toggles.** Selecting everything shown is a one-click action, not a state - and a `<button>` reads
+  as that action, matching how the request that added them was phrased. Both tick/untick every
+  `.rowchk` in a single pass; a lead's checkbox renders twice (mobile card + desktop row), so both
+  copies move together automatically.
 - **Any backslash meant for the browser's own JS/regex, written inside `shell()`'s template
   literal, must be doubled (`\\t`, `\\n`, `\\s`).** `shell()`'s return value is one big JS template
   literal spanning the whole page including the inline `<script>` — Node processes its escape
