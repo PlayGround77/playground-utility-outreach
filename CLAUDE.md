@@ -213,12 +213,15 @@ forward to it").
   condition is what keeps this safe — someone who wrote again after we already replied is the
   strongest signal that they are still engaged, so that lead stays, muted rather than gone, even if
   the AI thinks the message itself needs nothing back); and (2) the operator's own hand-set
-  `response` status — `Booked a call` / `Reviewing Data` also drops a lead out of `bannerWaiting`
-  (`QUIET_RESPONSES` in `src/server.js`), because a status the operator set by hand outranks a
-  mechanical "their message is newer" test. Those quieted leads are not forgotten: they are counted
-  and surfaced as one muted line under the banner ("N more with a booked call / data review also
-  wrote"), linking to `?view=booked`. Every dropped lead is still fully `needsReply` everywhere else —
-  the row stripe, the tiles, the main table — only the banner's own list narrows.
+  `response` status — `Booked a call` / `Reviewing Data` / `Negotiating Price` also drops a lead out
+  of `bannerWaiting` (`QUIET_RESPONSES` in `src/server.js`), because a status the operator set by
+  hand outranks a mechanical "their message is newer" test. Those quieted leads are not forgotten:
+  they are counted and surfaced as one muted line under the banner ("N more with a booked call /
+  data review / price talk also wrote"), linking to `?view=booked`. Every dropped lead is still fully
+  `needsReply` everywhere else — the row stripe, the tiles, the main table — only the banner's own
+  list narrows. Adding a new "conversation is already moving" status means adding it to
+  `QUIET_RESPONSES` too, or it nags the banner despite being just as clearly in-progress as the
+  other two.
 - When a lead does stay in the banner with `ai_action_needed === 'no'`, the bold "✍️ Draft a reply →"
   is replaced by a muted "✓ probably no reply needed" pill (the reason as its title) plus a small
   "Draft a reply anyway →" — softened, never silently gone.

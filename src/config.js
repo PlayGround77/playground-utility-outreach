@@ -110,7 +110,7 @@ const config = {
   },
   responses: {
     respond: 'Respond', bookedCall: 'Booked a call', reviewingData: 'Reviewing Data',
-    notRelevant: 'Not Relevant', noResponse: 'No Response'
+    negotiatingPrice: 'Negotiating Price', notRelevant: 'Not Relevant', noResponse: 'No Response'
   },
 
   dashboard: {

@@ -173,11 +173,11 @@ function linkedinLinkCell(l) {
 
 /* ---- status option lists + colors ---- */
 const OUTREACH_OPTS = ['', 'Email Sent', 'Follow-up 1 Sent', 'Follow-up 2 Sent', 'Sequence Closed'];
-const RESPONSE_OPTS = ['', 'Respond', 'Booked a call', 'Reviewing Data', 'Not Relevant', 'No Response'];
+const RESPONSE_OPTS = ['', 'Respond', 'Booked a call', 'Reviewing Data', 'Negotiating Price', 'Not Relevant', 'No Response'];
 const STATUS_COLOR = {
   'Email Sent': '#3b82f6', 'Follow-up 1 Sent': '#f59e0b', 'Follow-up 2 Sent': '#f97316',
   'Sequence Closed': '#6b7280', 'Respond': '#10b981', 'Booked a call': '#059669',
-  'Reviewing Data': '#7c3aed', 'Not Relevant': '#ef4444', 'No Response': '#6b7280'
+  'Reviewing Data': '#7c3aed', 'Negotiating Price': '#d97706', 'Not Relevant': '#ef4444', 'No Response': '#6b7280'
 };
 function optionList(opts, current) {
   return opts.map((o) =>
@@ -188,7 +188,7 @@ function selectCell(id, name, opts, current, backHere) {
   const style = c ? ` style="border-left:4px solid ${c}"` : '';
   const title = name === 'outreach'
     ? 'Outreach status — where this lead is in the sequence. Set automatically as emails go out; change here to override.'
-    : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call”, “Reviewing Data” (once they have given us access and we are going through their numbers), “Not Relevant” or “No Response” yourself.';
+    : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call”, “Reviewing Data” (once they have given us access and we are going through their numbers), “Negotiating Price”, “Not Relevant” or “No Response” yourself.';
   return `<form method="post" action="/action/${id}/set" class="sel">
     <input type="hidden" name="back" value="${esc(backHere)}">
     <select name="${name}" title="${esc(title)}" onchange="this.form.submit()"${style}>${optionList(opts, current)}</select>
@@ -698,6 +698,8 @@ function makeApp() {
           hint: 'A call is scheduled with them - the funnel is working' },
         { key: 'reviewing', label: 'Reviewing Data', test: (l) => l.response === config.responses.reviewingData,
           hint: 'They gave us access and we are going through their numbers' },
+        { key: 'negotiating', label: 'Negotiating Price', test: (l) => l.response === config.responses.negotiatingPrice,
+          hint: 'Talking numbers - the deal is close' },
         { key: 't_closed', label: 'Closed', test: (l) => l.outreach === S.sequenceClosed,
           hint: 'Sequence finished or stopped - bounced, or no answer after both follow-ups' },
         { key: 'blocked', label: 'Blocked', test: (l) => l.grp === config.groups.blockList }
@@ -730,11 +732,12 @@ function makeApp() {
       const waiting = leads
         .filter((l) => l.needsReply)
         .sort((a, b) => String(b.last_inbound_at || '').localeCompare(String(a.last_inbound_at || '')));
-      // A booked call or an open data review is a conversation already moving,
-      // not one waiting on an answer. That status was set by hand, so it is a
-      // stronger statement about where the lead stands than the mechanical
-      // "their message is newer" test - and the banner should stop asking.
-      const QUIET_RESPONSES = [config.responses.bookedCall, config.responses.reviewingData];
+      // A booked call, an open data review, or an active price negotiation is
+      // a conversation already moving, not one waiting on an answer. That
+      // status was set by hand, so it is a stronger statement about where the
+      // lead stands than the mechanical "their message is newer" test - and
+      // the banner should stop asking.
+      const QUIET_RESPONSES = [config.responses.bookedCall, config.responses.reviewingData, config.responses.negotiatingPrice];
       const isQuiet = (l) => QUIET_RESPONSES.includes(l.response);
       // needsReply itself stays purely mechanical everywhere else (the row
       // stripe, the tiles) - never let an AI guess hide a lead there. The
@@ -1232,9 +1235,11 @@ function makeApp() {
             <b>Country:</b> where the studio is based, from AppStoreSpy. Its job is to narrow down a common name on LinkedIn.<br>
             <b>Response status:</b> "Respond" is set automatically on their first reply. Everything after that is set by
             hand as the conversation moves: <b>Booked a call</b>, <b>Reviewing Data</b> (they gave us access and we are going
-            through their numbers), <b>Not Relevant</b>, or <b>No Response</b> (closed out after both follow-ups with silence).
-            Setting <b>Booked a call</b> or <b>Reviewing Data</b> also stops the green "waiting on you" banner from nagging
-            about that lead — the conversation is already moving. It still shows the red NEEDS REPLY stripe in the list.<br>
+            through their numbers), <b>Negotiating Price</b>, <b>Not Relevant</b>, or <b>No Response</b> (closed out after
+            both follow-ups with silence).
+            Setting <b>Booked a call</b>, <b>Reviewing Data</b> or <b>Negotiating Price</b> also stops the green
+            "waiting on you" banner from nagging about that lead — the conversation is already moving. It still shows the
+            red NEEDS REPLY stripe in the list.<br>
             <b>The tiles at the top are clickable</b> — each one filters the table to exactly the leads it counted, and "← Back to all" clears it.<br>
             <b>Filter chips:</b> every filter you apply appears as a chip under the search box — click its × to remove just that one.<br>
             <b>Sorting:</b> click any column header to sort by it (▲/▼ shows the active one and direction); click again to flip direction. This combines with whatever filters and search are already applied.<br>
@@ -1294,8 +1299,8 @@ function makeApp() {
             </div>`;
           }).join('')}
           ${quietCount ? `<div class="muted" style="margin-top:.5rem;font-size:.8rem">
-            ${quietCount} more with a booked call / data review also wrote - not counted above, because that
-            conversation is already moving. <a href="/?view=booked">Show them →</a>
+            ${quietCount} more with a booked call / data review / price talk also wrote - not counted above,
+            because that conversation is already moving. <a href="/?view=booked">Show them →</a>
           </div>` : ''}
         </div>` : ''}
 
@@ -1334,7 +1339,7 @@ function makeApp() {
               </label>
               <label title="Quick presets: which leads to show based on their group/status">View:
                 <select name="view" onchange="this.form.submit()" title="Quick presets: which leads to show based on their group/status">
-                  ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['booked', 'Booked calls'], ['blocked', 'Blocked only']]
+                  ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['booked', 'Booked calls'], ['negotiating', 'Negotiating Price'], ['blocked', 'Blocked only']]
                     .map(([v, l]) => `<option value="${v}"${view === v ? ' selected' : ''}>${l}</option>`).join('')}
                 </select>
               </label>
