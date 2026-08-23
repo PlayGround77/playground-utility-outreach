@@ -764,6 +764,7 @@ function makeApp() {
       const lastWatchRun = await db.getSetting('last_watch_run', '');
       const lastWatchStatus = await db.getSetting('last_watch_status', 'never run yet');
       const gmailConnected = await email.isConnected();
+      const replyAlertsOn = (await db.getSetting('reply_alert_enabled', 'true')) !== 'false';
       const redirectUri = baseUrl(req) + '/oauth/callback';
 
       // View filter (defaults to hiding the Block List).
@@ -1109,6 +1110,19 @@ function makeApp() {
               <span class="help">A fixed number of emails to send per day. Leave empty or 0 to use the automatic warm-up ramp (currently ${quota}/day).</span>
             </label>
             <button style="margin-top:.4rem">Save quota</button>
+          </form>
+        </details>
+
+        <details class="crit">
+          <summary>🔔 Alerts</summary>
+          <form method="post" action="/settings/reply-alerts" class="stack" style="margin-top:.4rem">
+            <input type="hidden" name="back" value="${esc(backPanel)}">
+            <label style="display:flex;align-items:flex-start;gap:.4rem;font-size:.85rem">
+              <input type="checkbox" name="enabled" ${replyAlertsOn ? 'checked' : ''} onchange="this.form.submit()">
+              <span>Email me the moment a new reply comes in
+                <span class="help">Separate from the daily 08:00 summary, which keeps sending either way. New replies always show on the dashboard regardless of this setting.</span>
+              </span>
+            </label>
           </form>
         </details>
 
@@ -2184,6 +2198,15 @@ function makeApp() {
       await criteria.set({ dailyQuotaOverride: Number.isFinite(n) && n > 0 ? n : 0 });
       return back(res, n > 0 ? `Daily send quota set to ${n}/day.` : 'Daily send quota reset to the automatic warm-up ramp.');
     } catch (e) { return back(res, '⚠️ Could not set quota: ' + e.message); }
+  });
+  // Immediate "N new replies" email, separate from the daily 08:00 summary
+  // (same recipient) - turning this off must not silence that digest too.
+  app.post('/settings/reply-alerts', async (req, res) => {
+    const on = !!req.body.enabled;
+    await db.setSetting('reply_alert_enabled', on ? 'true' : 'false');
+    return back(res, on
+      ? '🔔 Reply-alert emails turned on.'
+      : '🔔 Reply-alert emails turned off - replies still show on the dashboard, and the daily summary is unaffected.');
   });
   app.post('/mode', async (req, res) => {
     const v = ['paused', 'manual', 'auto'].includes(req.body.value) ? req.body.value : 'manual';

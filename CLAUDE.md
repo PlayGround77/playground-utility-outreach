@@ -179,6 +179,12 @@ replied is the case that matters most, and a first-reply-only test misses it ent
 - **The reply watcher writes to the DB in dry mode.** DRY_RUN means no email leaves the building;
   reading the inbox and recording what was found is observation. It used to skip the writes, which
   left the dashboard blank on the one setting people test in. Only the alert email is gated.
+- **The immediate "N new replies" alert email is a separate dashboard toggle** (`reply_alert_enabled`
+  setting, ⚙ Settings → 🔔 Alerts), independent of the daily 08:00 summary even though both go to the
+  same `config.report.summaryTo` address — turning one off must never silence the other. Default is
+  `'true'` (any value other than the literal string `'false'` counts as on), so an operator who never
+  touches the setting keeps the exact behavior that existed before it was added. Replies are still
+  fully recorded either way; this only silences the extra email.
 - **`needsReply` is computed once, on the lead objects**, and drives the banner, the row stripe and
   the counts alike — one definition, not three.
 - The row stripe hangs off the **pinned first cell**, because the Reply column scrolls out of view.

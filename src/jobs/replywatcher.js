@@ -102,7 +102,10 @@ async function runReplyWatcher() {
 
     // Immediate alert so a hot lead isn't missed until the 08:00 summary. This
     // is the only outward-facing step here, so this is what dry mode gates.
-    if (freshReplies.length && config.report.summaryTo && !dry) {
+    // Dashboard-toggleable, separate from the daily summary (same summaryTo
+    // address) - turning this off must not also silence the 08:00 digest.
+    const alertsOn = await db.getSetting('reply_alert_enabled', 'true') !== 'false';
+    if (freshReplies.length && config.report.summaryTo && !dry && alertsOn) {
       const body = freshReplies.map(({ lead, info, afterOurReply }) =>
         `${lead.name} <${lead.email}>${afterOurReply ? '  [replied again after your answer]' : ''}\n` +
         (info.subject ? `Subject: ${info.subject}\n` : '') +
