@@ -173,11 +173,13 @@ function linkedinLinkCell(l) {
 
 /* ---- status option lists + colors ---- */
 const OUTREACH_OPTS = ['', 'Email Sent', 'Follow-up 1 Sent', 'Follow-up 2 Sent', 'Sequence Closed'];
-const RESPONSE_OPTS = ['', 'Respond', 'Booked a call', 'Reviewing Data', 'Negotiating Price', 'Not Relevant', 'No Response'];
+const RESPONSE_OPTS = ['', 'Respond', 'Booked a call', 'Reviewing Data', 'Negotiating Price',
+  'Too Expensive', 'Maybe Later', 'Not Relevant', 'No Response'];
 const STATUS_COLOR = {
   'Email Sent': '#3b82f6', 'Follow-up 1 Sent': '#f59e0b', 'Follow-up 2 Sent': '#f97316',
   'Sequence Closed': '#6b7280', 'Respond': '#10b981', 'Booked a call': '#059669',
-  'Reviewing Data': '#7c3aed', 'Negotiating Price': '#d97706', 'Not Relevant': '#ef4444', 'No Response': '#6b7280'
+  'Reviewing Data': '#7c3aed', 'Negotiating Price': '#d97706', 'Too Expensive': '#b91c1c',
+  'Maybe Later': '#0e7490', 'Not Relevant': '#ef4444', 'No Response': '#6b7280'
 };
 function optionList(opts, current) {
   return opts.map((o) =>
@@ -188,10 +190,23 @@ function selectCell(id, name, opts, current, backHere) {
   const style = c ? ` style="border-left:4px solid ${c}"` : '';
   const title = name === 'outreach'
     ? 'Outreach status — where this lead is in the sequence. Set automatically as emails go out; change here to override.'
-    : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call”, “Reviewing Data” (once they have given us access and we are going through their numbers), “Negotiating Price”, “Not Relevant” or “No Response” yourself.';
+    : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call”, “Reviewing Data” (once they have given us access and we are going through their numbers), “Negotiating Price”, “Too Expensive”, “Maybe Later”, “Not Relevant” or “No Response” yourself.';
   return `<form method="post" action="/action/${id}/set" class="sel">
     <input type="hidden" name="back" value="${esc(backHere)}">
     <select name="${name}" title="${esc(title)}" onchange="this.form.submit()"${style}>${optionList(opts, current)}</select>
+  </form>`;
+}
+
+// Set by hand as a negotiation moves - not sourced from any API, so a plain
+// editable number rather than the read-only $ columns further left. Saves on
+// change (blur or Enter), same one-field-at-a-time pattern as selectCell.
+function priceCell(l, field, backHere, title) {
+  const n = Number(l[field]);
+  const val = n > 0 ? n : '';
+  return `<form method="post" action="/action/${l.id}/set" class="sel" style="display:inline-flex;align-items:center;gap:.2rem">
+    <input type="hidden" name="back" value="${esc(backHere)}">
+    $<input type="number" name="${field}" value="${esc(val)}" placeholder="—" min="0" step="1"
+       title="${esc(title)}" style="width:85px" onchange="this.form.submit()">
   </form>`;
 }
 
@@ -577,6 +592,12 @@ ${side ? `<a class="scrim" id="sidescrim" href="${esc(closeHref)}" aria-label="C
     // the actual data.
     var sel = cell.querySelector('select');
     if(sel) return sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+    // A plain editable <input> (Asking/Our price) has no textContent at all -
+    // its value lives in the value attribute, not as rendered text. Every
+    // such form also carries a hidden "back" field before the visible
+    // control, so it has to be excluded explicitly or it wins the query.
+    var inp = cell.querySelector('input:not(.rowchk):not([type="hidden"])');
+    if(inp) return inp.value || '';
     // Everything else that is a page control rather than a fact about the
     // lead (the row checkbox, the Preview/Send/Block/Delete buttons and
     // their forms) contributes no text once removed.
@@ -802,7 +823,9 @@ function makeApp() {
         // The important one: a blue LinkedIn icon (found on the studio's own
         // site) is a real link; a grey one only opens search suggestions.
         // Filtering must respect that distinction, not just "has a value".
-        linkedin: qp.f_linkedin || ''
+        linkedin: qp.f_linkedin || '',
+        askMin: qp.f_askMin, askMax: qp.f_askMax,
+        offMin: qp.f_offMin, offMax: qp.f_offMax
       };
       // One list drives the chip row, the "N active" badge and whether any
       // filter is on at all - the same reason TILES owns both its count and
@@ -834,7 +857,11 @@ function makeApp() {
           label: (v) => ({ verified: 'Contact: verified', guessed: 'Contact: guessed', none: 'Contact: none' }[v] || v) },
         { k: 'f_phone', adv: true, label: (v) => (v === 'yes' ? 'Has phone' : 'No phone') },
         { k: 'f_linkedin', adv: true,
-          label: (v) => (v === 'verified' ? '🔗 LinkedIn verified' : 'LinkedIn: search only') }
+          label: (v) => (v === 'verified' ? '🔗 LinkedIn verified' : 'LinkedIn: search only') },
+        { k: 'f_askMin', adv: true, label: (v) => `Asking ≥ $${num(v)}` },
+        { k: 'f_askMax', adv: true, label: (v) => `Asking ≤ $${num(v)}` },
+        { k: 'f_offMin', adv: true, label: (v) => `Our price ≥ $${num(v)}` },
+        { k: 'f_offMax', adv: true, label: (v) => `Our price ≤ $${num(v)}` }
       ];
       const activeChips = CHIPS.filter((c) => String(qp[c.k] || '').trim() !== '');
       const anyFilterActive = activeChips.length > 0;
@@ -897,6 +924,12 @@ function makeApp() {
           // as the same "has LinkedIn" bucket.
           if (f.linkedin === 'verified' && !String(l.linkedin_url || '').trim()) return false;
           if (f.linkedin === 'search' && String(l.linkedin_url || '').trim()) return false;
+          const askMin = num2(f.askMin), askMax = num2(f.askMax);
+          if (askMin !== null && Number(l.asking_price) < askMin) return false;
+          if (askMax !== null && Number(l.asking_price) > askMax) return false;
+          const offMin = num2(f.offMin), offMax = num2(f.offMax);
+          if (offMin !== null && Number(l.offer_price) < offMin) return false;
+          if (offMax !== null && Number(l.offer_price) > offMax) return false;
           return true;
         });
       }
@@ -926,6 +959,8 @@ function makeApp() {
         // Verified links first (or last, reversed) - not alphabetical by URL,
         // which would just interleave with the unverified rows.
         linkedin: { num: (l) => (String(l.linkedin_url || '').trim() ? 1 : 0) },
+        asking: { num: (l) => Number(l.asking_price) || 0 },
+        offer: { num: (l) => Number(l.offer_price) || 0 },
         outreach: { text: (l) => l.outreach || '' },
         response: { text: (l) => l.response || '' },
         group: { text: (l) => l.grp || '' }
@@ -958,7 +993,7 @@ function makeApp() {
       // Keep in sync with the <thead> below - it is hand-written, not built
       // from this count, because each cell's markup (sortable vs plain,
       // tooltip text) differs too much to make an array worth it here.
-      const COLUMN_COUNT = 25;
+      const COLUMN_COUNT = 27;
 
       const appCell = (l) => l.store_link
         ? `<a href="${esc(l.store_link)}" target="_blank" rel="noopener">${esc(l.top_app || l.name)}</a>`
@@ -1017,6 +1052,8 @@ function makeApp() {
         <td class="muted">${esc(l.country)}</td>
         <td>${findPersonCell(l)}</td>
         <td class="ell">${linkedinLinkCell(l)}</td>
+        <td>${priceCell(l, 'asking_price', backHere, 'What the studio is asking for the app')}</td>
+        <td>${priceCell(l, 'offer_price', backHere, "The number we've offered or are prepared to offer")}</td>
         <td>${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach, backHere)}</td>
         <td>${selectCell(l.id, 'response', RESPONSE_OPTS, l.response, backHere)}</td>
         <td class="ell" title="${esc(l.reply_snippet)}">${replyCell(l)}</td>
@@ -1047,6 +1084,10 @@ function makeApp() {
             <span class="ell">${contactCell(l)}</span>
             <span>${phoneCell(l)}</span>
             <span>${findPersonCell(l)}</span>
+          </div>
+          <div class="lcard-row" style="margin-top:.35rem;gap:.6rem;font-size:.78rem">
+            <span class="muted">Asking ${priceCell(l, 'asking_price', backHere, 'What the studio is asking for the app')}</span>
+            <span class="muted">Our ${priceCell(l, 'offer_price', backHere, "The number we've offered or are prepared to offer")}</span>
           </div>
           <div class="lcard-row" style="margin-top:.35rem;gap:.4rem">
             ${selectCell(l.id, 'outreach', OUTREACH_OPTS, l.outreach, backHere)}
@@ -1249,11 +1290,15 @@ function makeApp() {
             <b>Country:</b> where the studio is based, from AppStoreSpy. Its job is to narrow down a common name on LinkedIn.<br>
             <b>Response status:</b> "Respond" is set automatically on their first reply. Everything after that is set by
             hand as the conversation moves: <b>Booked a call</b>, <b>Reviewing Data</b> (they gave us access and we are going
-            through their numbers), <b>Negotiating Price</b>, <b>Not Relevant</b>, or <b>No Response</b> (closed out after
-            both follow-ups with silence).
+            through their numbers), <b>Negotiating Price</b>, <b>Too Expensive</b> (they pushed back on the number),
+            <b>Maybe Later</b> (not now, worth another look down the line), <b>Not Relevant</b>, or <b>No Response</b>
+            (closed out after both follow-ups with silence).
             Setting <b>Booked a call</b>, <b>Reviewing Data</b> or <b>Negotiating Price</b> also stops the green
             "waiting on you" banner from nagging about that lead — the conversation is already moving. It still shows the
             red NEEDS REPLY stripe in the list.<br>
+            <b>Asking Price / Our Price:</b> plain numbers you type in as a negotiation moves — what the studio is asking,
+            and the number we've offered or are prepared to. Not sourced from anywhere; saves as soon as you leave the
+            field. Blank means nothing has been discussed yet.<br>
             <b>The tiles at the top are clickable</b> — each one filters the table to exactly the leads it counted, and "← Back to all" clears it.<br>
             <b>Filter chips:</b> every filter you apply appears as a chip under the search box — click its × to remove just that one.<br>
             <b>Sorting:</b> click any column header to sort by it (▲/▼ shows the active one and direction); click again to flip direction. This combines with whatever filters and search are already applied.<br>
@@ -1372,7 +1417,7 @@ function makeApp() {
               <span class="muted">Showing ${shown.length} of ${leads.length} leads</span>
             </div>
             <details class="crit" style="margin-top:.5rem"${advCount ? ' open' : ''}>
-              <summary>🎛 More column filters (Opportunity, Installs, Rating, Revenue, Apps, Priority, Category, Country, Site, Contact, Phone, LinkedIn, Outreach/Response)${advCount ? ` <span class="fcount">${advCount}</span>` : ''}</summary>
+              <summary>🎛 More column filters (Opportunity, Installs, Rating, Revenue, Apps, Priority, Category, Country, Site, Contact, Phone, LinkedIn, Asking/Our price, Outreach/Response)${advCount ? ` <span class="fcount">${advCount}</span>` : ''}</summary>
               <div class="grid" style="margin-top:.6rem">
                 <label title="Only show leads with an Opportunity Score at or above this (0–100)">Opportunity min<input name="f_oppMin" value="${esc(f.oppMin || '')}"></label>
                 <label title="Only show leads with an Opportunity Score at or below this (0–100)">Opportunity max<input name="f_oppMax" value="${esc(f.oppMax || '')}"></label>
@@ -1421,6 +1466,10 @@ function makeApp() {
                   <option value="verified"${f.linkedin === 'verified' ? ' selected' : ''}>🔗 Verified (found on their site)</option>
                   <option value="search"${f.linkedin === 'search' ? ' selected' : ''}>Search only (not found)</option>
                 </select></label>
+                <label title="Only show leads whose asking price is at or above this">Asking price min ($)<input name="f_askMin" value="${esc(f.askMin || '')}"></label>
+                <label title="Only show leads whose asking price is at or below this">Asking price max ($)<input name="f_askMax" value="${esc(f.askMax || '')}"></label>
+                <label title="Only show leads where our offered price is at or above this">Our price min ($)<input name="f_offMin" value="${esc(f.offMin || '')}"></label>
+                <label title="Only show leads where our offered price is at or below this">Our price max ($)<input name="f_offMax" value="${esc(f.offMax || '')}"></label>
               </div>
               <p><button type="submit" title="Apply all the column filters above">Apply filters</button></p>
             </details>
@@ -1445,6 +1494,8 @@ function makeApp() {
             ${th('country', 'Country', 'Where the studio is based (AppStoreSpy hq_country). Narrows down a common name on LinkedIn.')}
             ${th('linkedin', 'LinkedIn', 'A blue LinkedIn icon is a profile the studio published on its own website — a real link. A grey one opens ready-made searches instead, because nothing was found: those are searches, not verified profiles.')}
             ${th('linkedin', 'LI Link', "The verified LinkedIn URL itself, when one was found on the studio's own site - the same profile as the LinkedIn column, shown as a link you can open or copy directly. Blank means nothing was found there yet.")}
+            ${th('asking', 'Asking Price', 'What the studio is asking for the app. Set by hand as the negotiation moves - not sourced from any API. Click to edit.')}
+            ${th('offer', 'Our Price', "The number we've offered or are prepared to offer. Set by hand. Click to edit.")}
             ${th('outreach', 'Outreach status')}${th('response', 'Response status')}<th title="What the lead actually wrote back (hover for more, or open the thread in Gmail)">Reply</th>${th('group', 'Group')}<th></th>
           </tr></thead>
           <tbody>${rows || `<tr><td colspan="${COLUMN_COUNT}" class="muted">No leads yet — click “Source now”.</td></tr>`}</tbody>
@@ -1511,6 +1562,14 @@ function makeApp() {
     const patch = {};
     if ('outreach' in req.body) patch.outreach = String(req.body.outreach);
     if ('response' in req.body) patch.response = String(req.body.response);
+    // Negative and non-numeric input clear the field back to unset (0), same
+    // as leaving the box empty - there is no such thing as a negative price.
+    for (const field of ['asking_price', 'offer_price']) {
+      if (field in req.body) {
+        const n = Number(req.body[field]);
+        patch[field] = Number.isFinite(n) && n > 0 ? n : 0;
+      }
+    }
     if (Object.keys(patch).length) await db.updateLead(Number(req.params.id), patch);
     res.redirect(backUrl(req));
   });

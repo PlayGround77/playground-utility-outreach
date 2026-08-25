@@ -76,6 +76,9 @@ async function init() {
       developer_id  TEXT NOT NULL DEFAULT '',
       message_id    TEXT NOT NULL DEFAULT '',
       thread_id     TEXT NOT NULL DEFAULT '',
+      -- Set by hand as a negotiation progresses, not sourced from any API.
+      asking_price  NUMERIC NOT NULL DEFAULT 0,
+      offer_price   NUMERIC NOT NULL DEFAULT 0,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -117,7 +120,9 @@ async function init() {
     "reply_thread TEXT NOT NULL DEFAULT ''",
     "last_inbound_at TEXT NOT NULL DEFAULT ''",
     "last_outbound_at TEXT NOT NULL DEFAULT ''",
-    'reply_count INTEGER NOT NULL DEFAULT 0'
+    'reply_count INTEGER NOT NULL DEFAULT 0',
+    'asking_price NUMERIC NOT NULL DEFAULT 0',
+    'offer_price NUMERIC NOT NULL DEFAULT 0'
   ]) {
     await q(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ${col};`);
   }

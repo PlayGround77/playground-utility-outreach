@@ -495,6 +495,15 @@ only unauthenticated route. Filters are GET query params so views are shareable.
   prompt) whenever nothing was verified — this column is only ever the certain case, mirroring the
   rule that guessed names and unverified links never get dressed up as something more solid than
   they are.
+- **Asking Price / Our Price are plain editable numbers (`priceCell()`), not sourced from any API.**
+  Set by hand as a negotiation moves, saved on change through the same `POST /action/:id/set` route
+  the status dropdowns use (`asking_price` / `offer_price`, clamped to a non-negative number server
+  side — a negative or non-numeric value resets to unset/0, same as leaving it blank). Sortable and
+  filterable like every other column. **`cellText()` (Copy table / Export) has to special-case a bare
+  `<input>` the same way it special-cases `<select>`** — an input has no `textContent` at all, its
+  value lives in the `value` attribute — and the query has to explicitly exclude `[type="hidden"]`,
+  because every price form also carries a hidden `back` field ahead of the visible input in the DOM,
+  which would otherwise win the match and copy the current page's own URL instead of the price.
 - **Bulk-action buttons (`⛔ Block selected` / `🗑 Delete selected`) stay `hidden` until a row is
   ticked.** The count is computed client-side from `.rowchk:checked`, deduped by `value` — a lead's
   checkbox renders **twice** (the mobile card and the desktop row), so a raw `querySelectorAll(...).
