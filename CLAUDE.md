@@ -253,6 +253,16 @@ blank tab. Two rules the swap must keep: it **never overwrites text the operator
   all of which 400 on Opus 5.
 - **`ANTHROPIC_API_KEY` has never been exercised against the live API** — the dev sandbox has no key.
   The wire format is verified; the model's actual output is not.
+- **The `.thread` box (the conversation itself) is viewport-relative on desktop and un-boxed on
+  mobile**, not a fixed pixel cap. It used to be a flat 420px scrollbox regardless of screen size,
+  which on a phone meant fighting two competing scroll gestures — the page's and the box's own nested
+  one — to read a whole conversation. Under 760px `.thread` gets `max-height:none;overflow:visible`
+  so it just flows with the page; desktop keeps a bounded box (`min(62vh,640px)`) since there's room
+  for a chat-style panel there. **Opening at the newest message uses `scrollIntoView()` on the last
+  message bubble, not `el.scrollTop = el.scrollHeight`** — the old approach only worked when `.thread`
+  itself was the scrolling element, which stopped being true the moment mobile's box became
+  unboxed; `scrollIntoView` finds whichever ancestor actually scrolls (the box on desktop, the page
+  on mobile) and works either way.
 
 The rule-based layer below still runs the classification and is what you get without a key.
 
@@ -378,6 +388,14 @@ table under `max-width:760px` (`.card.wrap{display:none}` / `.cards{display:bloc
   only the layout differs, never the logic. `replyCell()` and `actionsCell()` were pulled out of the
   table's own `<td>` markup into small functions for the same reason, so the Preview/Send/Block/Delete
   buttons and the reply-snippet/NEEDS-REPLY link are one implementation shared by both views, not two.
+- **`actionsCell()`'s primary action is state-dependent, not a fixed set of buttons.** A lead with no
+  reply yet gets 👁 Preview + ✉ Send (the cold-sequence actions). Once `reply_snippet` is set, both are
+  replaced by a single "💬 View & Reply" button pointing at `/reply/:id` — the same page the Reply
+  column's own snippet link already opens. This was a real point of confusion fixed on request:
+  Preview shows the next cold-sequence email, which means nothing once they've replied, and
+  `sendOne()` (behind ✉ Send) already refuses any lead with a response set — so both buttons were
+  dead weight sitting next to the one link that actually mattered, in a different column. Block/Delete
+  stay either way.
 - **Both views always render**, every request — CSS decides which one is visible. That is deliberate:
   a server-rendered page with no client framework has no reliable way to know the viewport before
   sending HTML, and building both is cheap next to a database round-trip.

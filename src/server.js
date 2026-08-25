@@ -174,12 +174,12 @@ function linkedinLinkCell(l) {
 /* ---- status option lists + colors ---- */
 const OUTREACH_OPTS = ['', 'Email Sent', 'Follow-up 1 Sent', 'Follow-up 2 Sent', 'Sequence Closed'];
 const RESPONSE_OPTS = ['', 'Respond', 'Booked a call', 'Reviewing Data', 'Negotiating Price',
-  'Too Expensive', 'Maybe Later', 'Not Relevant', 'No Response'];
+  'Too Expensive', 'Maybe in the Future', 'Not Relevant', 'No Response'];
 const STATUS_COLOR = {
   'Email Sent': '#3b82f6', 'Follow-up 1 Sent': '#f59e0b', 'Follow-up 2 Sent': '#f97316',
   'Sequence Closed': '#6b7280', 'Respond': '#10b981', 'Booked a call': '#059669',
   'Reviewing Data': '#7c3aed', 'Negotiating Price': '#d97706', 'Too Expensive': '#b91c1c',
-  'Maybe Later': '#0e7490', 'Not Relevant': '#ef4444', 'No Response': '#6b7280'
+  'Maybe in the Future': '#0e7490', 'Not Relevant': '#ef4444', 'No Response': '#6b7280'
 };
 function optionList(opts, current) {
   return opts.map((o) =>
@@ -190,7 +190,7 @@ function selectCell(id, name, opts, current, backHere) {
   const style = c ? ` style="border-left:4px solid ${c}"` : '';
   const title = name === 'outreach'
     ? 'Outreach status — where this lead is in the sequence. Set automatically as emails go out; change here to override.'
-    : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call”, “Reviewing Data” (once they have given us access and we are going through their numbers), “Negotiating Price”, “Too Expensive”, “Maybe Later”, “Not Relevant” or “No Response” yourself.';
+    : 'Response status — set to “Respond” automatically when they reply. You set “Booked a call”, “Reviewing Data” (once they have given us access and we are going through their numbers), “Negotiating Price”, “Too Expensive”, “Maybe in the Future”, “Not Relevant” or “No Response” yourself.';
   return `<form method="post" action="/action/${id}/set" class="sel">
     <input type="hidden" name="back" value="${esc(backHere)}">
     <select name="${name}" title="${esc(title)}" onchange="this.form.submit()"${style}>${optionList(opts, current)}</select>
@@ -284,6 +284,17 @@ function shell(inner, side, sideOpen, closeHref) {
      the grid is the same width as its cell, regardless of option text. */
   .grid select{width:100%;margin-top:.2rem}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  /* The reply page's own conversation view. Roomier than a fixed pixel cap -
+     most of the viewport height, so it reads like the mail thread it is
+     rather than a cramped preview box you have to fight with. */
+  .thread{max-height:min(62vh,640px);overflow-y:auto}
+  @media (max-width: 760px) {
+    /* A second, nested scrollbar inside an already-scrolling phone screen is
+       the uncomfortable part - one scroll gesture beats two competing ones.
+       Let the thread flow with the page instead; scrollIntoView (JS) still
+       opens it at the newest message either way. */
+    .thread{max-height:none;overflow:visible}
+  }
   .wrap{overflow-x:auto}
   /* Card list for narrow screens - built from the same lead data and cell
      helpers as the table, just stacked instead of columned. Hidden by default;
@@ -445,8 +456,13 @@ ${side ? `<a class="scrim" id="sidescrim" href="${esc(closeHref)}" aria-label="C
   // elsewhere, on Escape, and when the pointer leaves. Only one open at a time.
   // Open a conversation at its newest message. The reply answers that one, so
   // starting at the top of a long thread shows the least useful part.
+  // scrollIntoView on the last bubble (not el.scrollTop) works the same way
+  // whether the thread scrolls in its own box (desktop) or flows with the
+  // page itself (mobile, under 760px - see the .thread media query), so
+  // "open at the newest message" holds in both layouts.
   document.querySelectorAll('.thread').forEach(function(el){
-    el.scrollTop = el.scrollHeight;
+    var msgs = el.children;
+    if(msgs.length) msgs[msgs.length - 1].scrollIntoView({ block: 'start' });
   });
 
   var openedAt = 0;   // when a panel was last opened, to tell apart the browser's
@@ -721,6 +737,10 @@ function makeApp() {
           hint: 'They gave us access and we are going through their numbers' },
         { key: 'negotiating', label: 'Negotiating Price', test: (l) => l.response === config.responses.negotiatingPrice,
           hint: 'Talking numbers - the deal is close' },
+        { key: 'expensive', label: 'Too Expensive', test: (l) => l.response === config.responses.tooExpensive,
+          hint: 'They pushed back on the number' },
+        { key: 'maybe', label: 'Maybe in the Future', test: (l) => l.response === config.responses.maybeLater,
+          hint: 'Not now - worth another look down the line' },
         { key: 't_closed', label: 'Closed', test: (l) => l.outreach === S.sequenceClosed,
           hint: 'Sequence finished or stopped - bounced, or no answer after both follow-ups' },
         { key: 'blocked', label: 'Blocked', test: (l) => l.grp === config.groups.blockList }
@@ -1025,9 +1045,19 @@ function makeApp() {
                 >↩ NEEDS REPLY</a> `
             : ''}<a href="/reply/${l.id}${backQS}" title="Read it and draft an answer that matches what they said">💬 ${esc(l.reply_snippet.slice(0, 60))}…</a>`
         : '';
+      // Preview shows the next COLD-sequence email (initial/FU1/FU2) and Send
+      // fires it - neither means anything once they've replied: the sequence
+      // is done, and sendOne() refuses any lead with a response set anyway.
+      // A single "View & Reply" replaces both, pointing at the one place
+      // that actually matters now - the same page the Reply column's own
+      // snippet link opens, so there is exactly one thing to click, not two
+      // that look like alternatives.
+      const primaryAction = (l) => l.reply_snippet
+        ? `<a href="/reply/${l.id}${backQS}" title="Read what they said and draft a reply"><button type="button" class="send">💬 View &amp; Reply</button></a>`
+        : `<form method="get" action="/preview/${l.id}"><input type="hidden" name="back" value="${esc(backHere)}"><button title="See the exact email that will be sent to this lead">👁 Preview</button></form>
+          <form method="post" action="/action/${l.id}/send" onsubmit="return confirm('Send the next email in the sequence to this lead now?')"><input type="hidden" name="back" value="${esc(backHere)}"><button class="send" title="Send the next email (initial → FU1 → FU2) to THIS lead now. Respects DRY_RUN.">✉ Send</button></form>`;
       const actionsCell = (l) => `
-          <form method="get" action="/preview/${l.id}"><input type="hidden" name="back" value="${esc(backHere)}"><button title="See the exact email that will be sent to this lead">👁 Preview</button></form>
-          <form method="post" action="/action/${l.id}/send" onsubmit="return confirm('Send the next email in the sequence to this lead now?')"><input type="hidden" name="back" value="${esc(backHere)}"><button class="send" title="Send the next email (initial → FU1 → FU2) to THIS lead now. Respects DRY_RUN.">✉ Send</button></form>
+          ${primaryAction(l)}
           <form method="post" action="/action/${l.id}/block"><input type="hidden" name="back" value="${esc(backHere)}"><button title="Move to Block List — never contacted again, removed from sending & future sourcing">⛔ Block</button></form>
           <form method="post" action="/action/${l.id}/delete" onsubmit="return confirm('Delete this lead permanently? (Block is better for junk — it also prevents re-sourcing.)')"><input type="hidden" name="back" value="${esc(backHere)}"><button title="Delete this lead permanently from the database">🗑</button></form>`;
 
@@ -1291,7 +1321,7 @@ function makeApp() {
             <b>Response status:</b> "Respond" is set automatically on their first reply. Everything after that is set by
             hand as the conversation moves: <b>Booked a call</b>, <b>Reviewing Data</b> (they gave us access and we are going
             through their numbers), <b>Negotiating Price</b>, <b>Too Expensive</b> (they pushed back on the number),
-            <b>Maybe Later</b> (not now, worth another look down the line), <b>Not Relevant</b>, or <b>No Response</b>
+            <b>Maybe in the Future</b> (not now, worth another look down the line), <b>Not Relevant</b>, or <b>No Response</b>
             (closed out after both follow-ups with silence).
             Setting <b>Booked a call</b>, <b>Reviewing Data</b> or <b>Negotiating Price</b> also stops the green
             "waiting on you" banner from nagging about that lead — the conversation is already moving. It still shows the
@@ -1398,7 +1428,7 @@ function makeApp() {
               </label>
               <label title="Quick presets: which leads to show based on their group/status">View:
                 <select name="view" onchange="this.form.submit()" title="Quick presets: which leads to show based on their group/status">
-                  ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['booked', 'Booked calls'], ['negotiating', 'Negotiating Price'], ['blocked', 'Blocked only']]
+                  ${[['nonblocked', 'Hide blocked'], ['all', 'All'], ['queue', 'Queue (not contacted)'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['booked', 'Booked calls'], ['negotiating', 'Negotiating Price'], ['expensive', 'Too Expensive'], ['maybe', 'Maybe in the Future'], ['blocked', 'Blocked only']]
                     .map(([v, l]) => `<option value="${v}"${view === v ? ' selected' : ''}>${l}</option>`).join('')}
                 </select>
               </label>
@@ -1770,7 +1800,7 @@ function makeApp() {
         <div class="card" style="padding:1rem;max-width:820px">
           <b>💬 The conversation${thread.length ? ` <span class="muted" style="font-weight:400">(${thread.length} message${thread.length === 1 ? '' : 's'}, oldest first)</span>` : ''}</b>
           ${lead.reply_subject ? `<div class="muted" style="margin-top:.3rem">${esc(lead.reply_subject)}</div>` : ''}
-          <div class="thread" style="margin-top:.5rem;max-height:420px;overflow:auto;padding-right:.2rem">
+          <div class="thread" style="margin-top:.5rem;padding-right:.2rem">
             ${thread.length
               ? thread.map((m, i) => {
                   const last = i === thread.length - 1;

@@ -110,7 +110,7 @@ const config = {
   },
   responses: {
     respond: 'Respond', bookedCall: 'Booked a call', reviewingData: 'Reviewing Data',
-    negotiatingPrice: 'Negotiating Price', tooExpensive: 'Too Expensive', maybeLater: 'Maybe Later',
+    negotiatingPrice: 'Negotiating Price', tooExpensive: 'Too Expensive', maybeLater: 'Maybe in the Future',
     notRelevant: 'Not Relevant', noResponse: 'No Response'
   },
 
