@@ -780,6 +780,14 @@ function makeApp() {
       // the banner should stop asking.
       const QUIET_RESPONSES = [config.responses.bookedCall, config.responses.reviewingData, config.responses.negotiatingPrice];
       const isQuiet = (l) => QUIET_RESPONSES.includes(l.response);
+      // A deal marked Too Expensive, Not Relevant or No Response is finished,
+      // not paused - there is nothing left to say, so a stray message after
+      // that tag (a "thanks anyway", a last remark) should not nag the
+      // banner. Unlike QUIET_RESPONSES this gets no footer mention either:
+      // those are still-open deals worth another look, this one is closed -
+      // if it needs revisiting, its own tile is right there.
+      const FINAL_RESPONSES = [config.responses.tooExpensive, config.responses.notRelevant, config.responses.noResponse];
+      const isFinal = (l) => FINAL_RESPONSES.includes(l.response);
       // needsReply itself stays purely mechanical everywhere else (the row
       // stripe, the tiles) - never let an AI guess hide a lead there. The
       // banner is just a nag list though, so it is allowed to lean on the AI:
@@ -787,7 +795,7 @@ function makeApp() {
       // have not written again since our last reply (the strongest signal
       // that they really are still waiting on us).
       const bannerWaiting = waiting.filter((l) =>
-        !isQuiet(l) && !(l.ai_action_needed === 'no' && !l.awaitingUs));
+        !isFinal(l) && !isQuiet(l) && !(l.ai_action_needed === 'no' && !l.awaitingUs));
       const awaitingCount = bannerWaiting.filter((l) => l.awaitingUs).length;
       // Hidden, not forgotten: they still wrote, and one of them rescheduling
       // or sending numbers matters. One muted line, no cards.
@@ -1335,8 +1343,10 @@ function makeApp() {
             <b>Maybe in the Future</b> (not now, worth another look down the line), <b>Not Relevant</b>, or <b>No Response</b>
             (closed out after both follow-ups with silence).
             Setting <b>Booked a call</b>, <b>Reviewing Data</b> or <b>Negotiating Price</b> also stops the green
-            "waiting on you" banner from nagging about that lead — the conversation is already moving. It still shows the
-            red NEEDS REPLY stripe in the list.<br>
+            "waiting on you" banner from nagging about that lead — the conversation is already moving, so a stray message
+            is folded into one muted summary line instead of its own card. Setting <b>Too Expensive</b>,
+            <b>Not Relevant</b> or <b>No Response</b> stops it completely — that deal is finished, so a message afterward
+            gets no mention there at all. Either way it still shows the red NEEDS REPLY stripe in the list.<br>
             <b>Asking Price / Our Price:</b> plain numbers you type in as a negotiation moves — what the studio is asking,
             and the number we've offered or are prepared to. Not sourced from anywhere; saves as soon as you leave the
             field. Blank means nothing has been discussed yet.<br>

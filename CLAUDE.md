@@ -228,6 +228,15 @@ forward to it").
   list narrows. Adding a new "conversation is already moving" status means adding it to
   `QUIET_RESPONSES` too, or it nags the banner despite being just as clearly in-progress as the
   other two.
+- **`FINAL_RESPONSES` (`Too Expensive` / `Not Relevant` / `No Response`) is the other half of that same
+  mechanism, for the opposite reason.** `QUIET_RESPONSES` is a deal still moving — dropped from the
+  banner's cards but kept in a muted footer count, because it is worth another look. `FINAL_RESPONSES`
+  is a deal the operator has already closed out by hand: it gets dropped **and** gets no footer
+  mention at all, because there is nothing left to revisit unless the status is changed back. A stray
+  message after either tag is still fully `needsReply` everywhere else (row stripe, tiles, table) —
+  only the banner, in both cases, stops asking. The distinction matters when adding a new status: a
+  "still in progress" one goes in `QUIET_RESPONSES` (counted), a "we are done here" one goes in
+  `FINAL_RESPONSES` (silent).
 - When a lead does stay in the banner with `ai_action_needed === 'no'`, the bold "✍️ Draft a reply →"
   is replaced by a muted "✓ probably no reply needed" pill (the reason as its title) plus a small
   "Draft a reply anyway →" — softened, never silently gone.
