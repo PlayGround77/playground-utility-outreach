@@ -396,6 +396,13 @@ table under `max-width:760px` (`.card.wrap{display:none}` / `.cards{display:bloc
   `sendOne()` (behind ✉ Send) already refuses any lead with a response set — so both buttons were
   dead weight sitting next to the one link that actually mattered, in a different column. Block/Delete
   stay either way.
+- **The studio name itself (`studioName()`) is also a link to `/reply/:id`, once there is a reply.**
+  It is the one cell that is always on screen without scrolling — the pinned first column on desktop,
+  the first line of every mobile card — while Actions sits at the far end of a wide table (or the
+  bottom of a card). Reaching all the way over just to click "View & Reply" was still the friction
+  point after that button existed; the name is the natural, always-reachable click target for the
+  same destination. Plain text (no link) when there is nothing to show yet. Shared between the table
+  row and the mobile card like every other cell-builder here, so the two can't disagree.
 - **Both views always render**, every request — CSS decides which one is visible. That is deliberate:
   a server-rendered page with no client framework has no reliable way to know the viewport before
   sending HTML, and building both is cheap next to a database round-trip.

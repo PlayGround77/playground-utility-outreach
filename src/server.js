@@ -1036,6 +1036,17 @@ function makeApp() {
       const backPanel = urlWith('panel', 'settings');
       const closeHref = urlWith('panel', null);
 
+      // The studio name is the one cell always on screen - it is the pinned
+      // first column on desktop, and the first thing in every mobile card -
+      // so once there is a conversation, it doubles as the click target for
+      // it. Reaching the Actions column on a wide table (or scrolling to the
+      // bottom of a mobile card) to find "View & Reply" was the friction this
+      // fixes; the name itself now opens straight to the same page. Before a
+      // reply exists there is no conversation yet, so it stays plain text.
+      const studioName = (l) => l.reply_snippet
+        ? `<a href="/reply/${l.id}${backQS}" title="Read what they said and draft a reply"><b>${esc(l.name)}</b></a>`
+        : `<b>${esc(l.name)}</b>`;
+
       // Shared between the desktop table and the mobile card list, so the two
       // views can never show different reply/action state for the same lead -
       // only the markup wrapping this changes with the layout.
@@ -1062,7 +1073,7 @@ function makeApp() {
           <form method="post" action="/action/${l.id}/delete" onsubmit="return confirm('Delete this lead permanently? (Block is better for junk — it also prevents re-sourcing.)')"><input type="hidden" name="back" value="${esc(backHere)}"><button title="Delete this lead permanently from the database">🗑</button></form>`;
 
       const rows = shown.slice(0, 500).map((l) => `<tr${l.needsReply ? ' class="needsreply"' : ''}>
-        <td title="${esc(l.name)}"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></td>
+        <td title="${esc(l.name)}"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> ${studioName(l)}</td>
         <td class="ell" title="${esc(l.top_app || l.name)}">${appCell(l)}${appBadge(l)}</td>
         <td title="${l.platform === 'ios' ? 'iOS' : 'Android'}">${l.platform === 'ios' ? '🍎' : '🤖'}</td>
         <td class="num"><b style="color:${l.opportunity >= 70 ? '#059669' : l.opportunity >= 45 ? '#b45309' : 'inherit'}">${num(l.opportunity)}</b>${Number(l.review_signals) ? ` <span class="badge" title="${esc(l.review_evidence)}">💬${l.review_signals}</span>` : ''}</td>
@@ -1099,7 +1110,7 @@ function makeApp() {
       const cards = shown.slice(0, 500).map((l) => `
         <div class="lcard${l.needsReply ? ' needsreply' : ''}">
           <div class="lcard-row">
-            <label class="lcard-name"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> <b>${esc(l.name)}</b></label>
+            <label class="lcard-name"><input type="checkbox" class="rowchk" name="ids" value="${l.id}" form="bulkform"> ${studioName(l)}</label>
             <b style="color:${l.opportunity >= 70 ? '#059669' : l.opportunity >= 45 ? '#b45309' : 'inherit'}">${num(l.opportunity)}</b>
           </div>
           <div class="lcard-row muted">
