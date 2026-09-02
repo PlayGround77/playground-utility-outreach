@@ -228,7 +228,7 @@ forward to it").
   list narrows. Adding a new "conversation is already moving" status means adding it to
   `QUIET_RESPONSES` too, or it nags the banner despite being just as clearly in-progress as the
   other two.
-- **`FINAL_RESPONSES` (`Too Expensive` / `Not Relevant` / `No Response`) is the other half of that same
+- **`FINAL_RESPONSES` (`Too Expensive` / `Maybe in the Future` / `Not Relevant` / `No Response`) is the other half of that same
   mechanism, for the opposite reason.** `QUIET_RESPONSES` is a deal still moving — dropped from the
   banner's cards but kept in a muted footer count, because it is worth another look. `FINAL_RESPONSES`
   is a deal the operator has already closed out by hand: it gets dropped **and** gets no footer
