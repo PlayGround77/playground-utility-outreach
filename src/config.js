@@ -36,7 +36,7 @@ const config = {
     ownerName: process.env.OWNER_NAME || 'Yogev',
     ownerTitle: process.env.OWNER_TITLE || 'Publishing Manager',
     // The legal entity, used where the email is about a transaction rather than
-    // a first hello (diligence requests, NDA offers).
+    // a first hello (diligence requests, follow-ups once they've replied).
     legalName: process.env.LEGAL_NAME || 'Playground Studio LLC',
     ownerEmail: process.env.GMAIL_USER || '',
     phone: process.env.OWNER_PHONE || '',

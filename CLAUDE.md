@@ -584,6 +584,14 @@ only unauthenticated route. Filters are GET query params so views are shareable.
 
 - **Outreach email copy must use only short hyphens (`-`).** No em/en dashes (`—`, `–`) in anything
   in `src/templates.js` that reaches a recipient. This is an explicit owner requirement.
+- **No reply, template or AI instruction may mention an NDA / confidentiality agreement.** Another
+  explicit owner requirement. Unlike the dash rule there is no safe mechanical scrub for this — a
+  blind word-removal regex can leave a sentence grammatically broken (`sanitize()` only works for
+  dashes because " - " is always a safe substitute) — so it is enforced at the source instead: the
+  `diligenceRequest()` and `who_are_you()` templates in `replydraft.js` and `ANGLE_BRIEFS.who_are_you`
+  no longer offer one, and `ai.js`'s `systemPrompt()` carries an explicit HARD RULE forbidding it, on
+  top of no longer *encouraging* it. Check both the templates and the system prompt if this rule
+  ever needs revisiting — fixing only one half left the other free to reintroduce it.
 - **`--once` in the npm scripts is a no-op.** Only `refill.js` reads a flag, and it is `--force`.
   `npm run sourcing:once` therefore stands down when the queue is above `refillFloor`; use
   `node src/jobs/refill.js --force` to actually source.

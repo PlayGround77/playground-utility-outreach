@@ -1872,7 +1872,7 @@ function makeApp() {
               : '<br>⚠️ Could not read the full thread from Gmail - working from the captured snippet only.'}
           </div>
           <label style="display:block;font-size:.8rem;color:var(--muted)">Tell Claude what to do differently (optional)
-            <input name="instruction" value="${esc(instruction)}" placeholder="e.g. they said email only - do not ask for a call, and mention the NDA"
+            <input name="instruction" value="${esc(instruction)}" placeholder="e.g. they said email only - do not ask for a call, keep it to two lines"
                    style="width:100%;margin-top:.2rem">
           </label>
           <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.6rem">

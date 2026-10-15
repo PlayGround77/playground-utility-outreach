@@ -85,8 +85,7 @@ function diligenceRequest(opts) {
     `Nothing sensitive at this stage - no keys, no passwords, no ownership changes. ` +
     `That all comes later, and only if we sign.<br><br>` +
     `Then just four quick questions:` +
-    numbered(QUESTIONS) +
-    `Happy to sign an NDA before any of this - say the word and we'll send one over today.`
+    numbered(QUESTIONS)
   );
 }
 
@@ -332,8 +331,7 @@ const templates = {
       `real users that aren't being monetised anywhere near their potential, which is why ` +
       `${appName(lead)} caught my eye.` +
       (site ? ` You can look us up at <a href="${site}">${site.replace(/^https?:\/\//, '')}</a>.` : '') +
-      `<br><br>${reviewIsEasy()} And we're happy to sign an NDA before you share anything at all - ` +
-      `say the word and we'll send one over today.<br><br>` +
+      `<br><br>${reviewIsEasy()}<br><br>` +
       meetingAsk('Happy to answer anything else first, on email or on a call -');
   },
 
@@ -506,7 +504,7 @@ const ANGLE_BRIEFS = {
   interested: 'Treat them as open to talking. Propose a short call.',
   price_first: 'They want a number before anything else. Explain we price after seeing the numbers, and ask for console access.',
   send_info: 'They asked what we need. Give the full view-only access request and the four questions.',
-  who_are_you: 'They are checking we are real. Establish credibility, offer an NDA, and do not ask for access yet.',
+  who_are_you: 'They are checking we are real. Establish credibility, and do not ask for access yet.',
   already_in_talks: 'They are talking to other buyers. Ask to be included, stress that we are fast, and do not be pushy.',
   later: 'The timing is wrong for them. Ask when is better, keep it warm, and do not ask for access yet.',
   wrong_person: 'They are not the right person. Apologise and ask for an introduction. Do not pitch.',

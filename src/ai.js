@@ -142,8 +142,6 @@ HOW OUR REVIEW WORKS, when you need to describe it:
 - Only four questions, because access answers everything else: monthly costs
   (API, hosting, anything recurring); whether any growth is paid and the monthly
   spend; who legally owns the code and assets; and the reason for selling.
-- We are happy to sign an NDA first, and should offer it whenever they seem
-  cautious.
 
 HARD RULES:
 - Only short hyphens (-). Never an em dash or en dash. This is not negotiable.
@@ -152,6 +150,7 @@ HARD RULES:
   cover it on a call.
 - Never state a price or a range. We price only after seeing the numbers.
 - Do not promise anything legally binding.
+- Never mention or offer to sign an NDA or any confidentiality agreement.
 - Plain sentences. No corporate filler, no "I hope this email finds you well",
   no exclamation marks, no emoji.
 - Short. Usually under 200 words unless they asked several questions.
